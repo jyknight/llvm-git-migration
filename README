@@ -1,0 +1,129 @@
+1. I use trac's sqlite database of svn metadata to ease lookup of events in svn history.
+
+So, you can run queries like:
+  select * from node_change where path regexp '^llvm/branches/[^/]*$' order by path,rev;
+to find all such changes, across all versions.
+
+update-repo.sh updates my local svn repository, and the trac db.
+
+2. There's a script, extract-author-ids.py, to generate an author map
+from the local svn repo (which uses usernames) and the git repos
+(which use email addresses).
+
+This attempts to handle that people changed email addresses in the
+past. I'm not sure if we actually want to use historical emails, or
+just give everyone's historical contributions their current
+email.
+
+TBD, but the info is there.
+
+3. After attempting to use a few tools (git-svn, reposurgeon), and
+having them blow up in varied ways, it appears as if the a tool that
+will actually work is the KDE project's "svn2git" aka
+"svn-all-fast-export" project. It can be found at
+<https://github.com/svn-all-fast-export/svn2git.git>.
+
+So, working on a rules file for it, in llvm-svn2git.rules.
+
+Driver script at:
+llvm-svn2git.sh
+
+The script will also need to grow to handle some other stuff:
+
+1. Fixing up branch points: multiple commits are used to make each
+   branch, so the branch creation is uglier than necessary (deleting a
+   bunch of files during the initial branch, then re-adding them in
+   the next merge-commit) -- those commits should be collapsed into
+   one, also removing the non-linear history.
+2. Fixing tags (so that they are tags, not branches).
+3. Editing commit messages (do we want to replace r12345 -> git
+   hash?).
+4. Extracting authorship information from commit message "Patch by
+   XXXX!" lines.
+5. ...I'm sure there's more.
+
+============
+NOTES about historical events discovered trawling through the trac db:
+============
+
+Note: When you have a node_change="M" (move) it is an Add on "path",
+and at the same time, a Delete on "base_path" (That's the only
+action type that modifies base_path rather than path).
+
+Weird events in history which need to be corrected in git migration:
+
+cfe.dead --
+   cfe/ was initially under an extra directory: cfe/cfe/trunk.
+   cfe/ was copied to cfe.dead/ @39733.
+   cfe/ was deleted @39734.
+   cfe.dead/cfe was copied to cfe/ @39734
+   cfe.dead/ was deleted @39736
+  ---> Should preserve history of cfe/ through this transition.
+
+cfe.dead/cfe was copied to:
+1|0000038531|cfe|D|A||-1
+1|0000039733|cfe.dead|D|M|cfe|39731
+1|0000039734|cfe|D|M|cfe.dead/cfe|39733
+1|0000039736|cfe.dead|D|D|cfe.dead|39735
+
+dragonegg --
+  Renamed from gcc-plugin at r83830, should keep together.
+
+1|0000083830|dragonegg|D|M|gcc-plugin|83829
+
+
+Other deleted toplevel dirs:
+elp -- removed in r154133, no content
+llvm-gcc-4-2 -- renamed to llvm-gcc-4.2 at r39966
+lold -- was old name for lld, renamed at r146828. No useful history prior to that.
+tmp -- trash.
+core # Abandoned modularization of llvm
+sample # Abandoned modularization of llvm
+support # Abandoned modularization of llvm
+llvm-top # Abandoned modularization of llvm
+website # Not actually the website (that's in www)
+
+Proposed to migrate into mono-repo:
+cfe # Rename to clang
+clang-tools-extra # Basically a part of clang...
+compiler-rt
+debuginfo-tests # Also basically part of clang...
+dragonegg
+libclc
+libcxx
+libcxxabi
+libunwind
+lld
+lldb
+llgo
+llvm
+openmp
+polly
+parallel-libs
+poolalloc
+
+Migrate, but delete retroactively:
+hlvm # delete after r41689 (but filter out later r160869 and r160870 "test commits")
+java # delete after r37806
+stacker # delete after r40406
+vmkit # delete after r219392
+
+
+Leave out of monorepo:
+clang-tests # Copy of GCC 4.2 testsuite, modified to work with clang
+clang-tests-external # Copy of GDB testsuite
+giri # Never actually developed here; actually https://github.com/liuml07/giri
+klee # Already migrated to github with history; https://github.com/klee/klee
+llvm-gcc-4.0 # GCC 4.0, modified for llvm
+llvm-gcc-4.2 # GCC 4.2, modified for llvm
+lnt
+llbrowse # An LLVM bitcode GUI browser
+television # A different LLVM GUI browser; shows effects of transforms, etc.
+nightly-test-server
+test-suite
+safecode # Contains a whole copy of clang??
+www # The website
+www-pubs # More the website
+www-releases # More the website
+zorg # The buildbot infrastructure
+

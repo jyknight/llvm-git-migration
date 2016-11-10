@@ -1,0 +1,99 @@
+# These two variables should partition the entire space of projects
+# which have ever existed. As such, only one is strictly necessary,
+# but I keep both for explicit redundancy.
+declare PROJECTS_TO_MIGRATE=(cfe|clang-tools-extra|compiler-rt|debuginfo-tests|dragonegg|libclc|libcxx|libcxxabi|libunwind|lld|lldb|llgo|llvm|openmp|polly|parallel-libs|poolalloc|hlvm|java|stacker|vmkit)
+declare PROJECTS_TO_IGNORE=(clang-tests|clang-tests-external|giri|klee|llvm-gcc-4.0|llvm-gcc-4.2|lnt|llbrowse|television|nightly-test-server|test-suite|safecode|www|www-pubs|www-releases|zorg|elp|llvm-gcc-4-2|lold|tmp|core|llvm-top|sample|support|website)
+
+create repository monorepo
+end repository
+
+
+### Handle cfe->clang special cases:
+
+# Skip the revisions that deleted cfe/cfe/ and moved it to cfe/
+match /
+  min revision 39733
+  max revision 39734
+end match
+match /cfe.dead/
+  min revision 39735
+  max revision 39735
+end match
+match /
+  min revision 39736
+  max revision 39736
+end match
+
+# cfe was in cfe/cfe, at first
+match /cfe/cfe/trunk/
+  repository monorepo
+  branch master
+  prefix clang/
+end match
+
+# There were no tags and branches back then, but there were empty directories; ignore them.
+match /cfe/cfe/
+end match
+
+# Also special cases for the current location of clang: we want to call it clang, not cfe.
+match /cfe/trunk/
+  repository monorepo
+  branch master
+  prefix clang/
+end match
+
+match /cfe/(tags|branches)/([^/]+)/
+  repository monorepo
+  branch \1/\2
+  prefix clang/
+end match
+
+### Handle gcc-plugin -> dragonegg special cases:
+
+match /gcc-plugin/
+  # In this (single) revision, the files weren't in a trunk subdir yet.
+  max revision 74837
+  branch master
+  prefix dragonegg/
+end match
+
+match /
+  # Ignore move from /gcc-plugin/ to /gcc-plugin/trunk/
+  min revision 74897
+  max revision 74897
+
+match /gcc-plugin/trunk/
+  # Special case: use "dragonegg" dir for /gcc-plugin.
+  max revision 83829
+  branch master
+  prefix dragonegg/
+end match
+
+match /
+  # Ignore move from gcc-plugin/ to dragonegg/.
+  min revision 83830
+  max revision 83830
+end match
+
+
+### Handle generic projects
+
+match /${PROJECTS_TO_MIGRATE}/trunk/
+  repository monorepo
+  branch master
+  prefix \1/
+end match
+
+match /${PROJECTS_TO_MIGRATE}/(tags|branches)/([^/]+)/
+  repository monorepo
+  prefix \1/
+  branch \2/\3
+end match
+
+### Ignore ignorables
+match /${PROJECTS_TO_IGNORE}/
+end match
+
+
+match /README.(html|txt)
+end match
