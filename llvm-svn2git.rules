@@ -1,12 +1,49 @@
 # These two variables should partition the entire space of projects
 # which have ever existed. As such, only one is strictly necessary,
 # but I keep both for explicit redundancy.
-declare PROJECTS_TO_MIGRATE=(cfe|clang-tools-extra|compiler-rt|debuginfo-tests|dragonegg|libclc|libcxx|libcxxabi|libunwind|lld|lldb|llgo|llvm|openmp|polly|parallel-libs|poolalloc|hlvm|java|stacker|vmkit)
-declare PROJECTS_TO_IGNORE=(clang-tests|clang-tests-external|giri|klee|llvm-gcc-4.0|llvm-gcc-4.2|lnt|llbrowse|television|nightly-test-server|test-suite|safecode|www|www-pubs|www-releases|zorg|elp|llvm-gcc-4-2|lold|tmp|core|llvm-top|sample|support|website)
+declare MONOREPO_PROJECTS=(cfe|clang-tools-extra|compiler-rt|debuginfo-tests|dragonegg|libclc|libcxx|libcxxabi|libunwind|lld|lldb|llgo|llvm|openmp|polly|parallel-libs|poolalloc|hlvm|java|stacker|vmkit)
+declare SEPARATED_PROJECTS=(lnt|test-suite|www|www-pubs|www-releases) # TODO
+declare IGNORED_PROJECTS=(clang-tests|clang-tests-external|giri|klee|llvm-gcc-4.0|llvm-gcc-4.2|lnt|llbrowse|television|nightly-test-server|test-suite|safecode|www|www-pubs|www-releases|zorg|elp|llvm-gcc-4-2|lold|tmp|core|llvm-top|sample|support|website)
+
+# Some branches are at a different level. Enumerate those.
+declare NESTED_BRANCHNAMES=(?:Apple|apple|checker|cremebrulee|google|ggreif|GSoC)
+declare BRANCH_PATTERNS=(tags/RELEASE_[^/]+/(?:final|Final|rc[0-9]+|dot[0-9]+[^/]*/)|tags/google/[^/]+/[^/]+/|(?:tags|branches)/(?:${NESTED_BRANCHNAMES}/|)[^/]+)
 
 create repository monorepo
 end repository
 
+### Ignore changes to projects after the revision we drop it.
+match /hlvm/
+  min revision 41690
+end match
+
+match /java/
+  min revision 26060
+end match
+
+match /stacker/
+  min revision 40407
+end match
+
+match /vmkit/
+  min revision 219393
+end match
+
+### Ignore initial messed up release_21 branch creation
+match /
+  min revision 41911
+  max revision 41917
+end match
+
+match /
+  min revision 41919
+  max revision 41919
+end match
+
+### In llvm/branches/ggreif/, there's a README and branches. Can't
+### have both; ignore the README.
+match /llvm/branches/ggreif/README
+end match
 
 ### Handle cfe->clang special cases:
 
@@ -42,10 +79,12 @@ match /cfe/trunk/
   prefix clang/
 end match
 
-match /cfe/(tags|branches)/([^/]+)/
+match /cfe/${BRANCH_PATTERNS}/
   repository monorepo
-  branch \1/\2
+  branch \1
   prefix clang/
+  # A '~' in one branch name (Apple/clang-6~1) makes git unhappy.
+  substitute branch s/~/./
 end match
 
 ### Handle gcc-plugin -> dragonegg special cases:
@@ -53,6 +92,7 @@ end match
 match /gcc-plugin/
   # In this (single) revision, the files weren't in a trunk subdir yet.
   max revision 74837
+  repository monorepo
   branch master
   prefix dragonegg/
 end match
@@ -61,37 +101,91 @@ match /
   # Ignore move from /gcc-plugin/ to /gcc-plugin/trunk/
   min revision 74897
   max revision 74897
+end match
 
 match /gcc-plugin/trunk/
   # Special case: use "dragonegg" dir for /gcc-plugin.
   max revision 83829
+  repository monorepo
   branch master
   prefix dragonegg/
 end match
 
 match /
-  # Ignore move from gcc-plugin/ to dragonegg/.
+  # Ignore move from gcc-plugin/ to dragonegg/, and re-addition of
+  # gcc-plugin with README.
   min revision 83830
-  max revision 83830
+  max revision 83831
 end match
 
+### Handle compiler-rt's initial revision, which was out of trunk/
+match /compiler-rt/
+  min revision 73172
+  max revision 73172
+  repository monorepo
+  branch master
+  prefix compiler-rt/BlocksRuntime/
+end match
+
+match /
+  # Ignore move to trunk/
+  min revision 74290
+  max revision 74290
+end match
+
+### Handle debuginfo-tests initial revisions, which were not in a trunk subdir
+match /debuginfo-tests/
+  max revision 113804
+  repository monorepo
+  branch master
+  prefix debuginfo-tests/
+end match
+
+match /debuginfo-tests/
+# Ignore revisions that just moved files from debuginfo-tests/ to debuginfo-tests/trunk/
+  min revision 113806
+  max revision 113811
+end match
+
+### Delete the llvm.zip files that got checked into lldb.
+
+# Ignore llvm.zip
+match /lldb/.*/llvm.zip
+end match
+
+# Ensure that the rule above, removing llvm.zip, gets appropriately
+# handled.  (The match path doesn't trigger if the target came in
+# through a directory copy, unless you use recurse.)
+match /lldb/(tags|branches)/[^/]+/$
+  action recurse
+end match
+
+match /lldb/branches/apple/calcite/lldb/$
+  action recurse
+end match
+
+match /lldb/branches/apple/calcite/lldb/
+  repository monorepo
+  prefix lldb/
+  branch branches/apple/calcite
+end match
 
 ### Handle generic projects
 
-match /${PROJECTS_TO_MIGRATE}/trunk/
+match /${MONOREPO_PROJECTS}/trunk/
   repository monorepo
   branch master
   prefix \1/
 end match
 
-match /${PROJECTS_TO_MIGRATE}/(tags|branches)/([^/]+)/
+match /${MONOREPO_PROJECTS}/${BRANCH_PATTERNS}/
   repository monorepo
   prefix \1/
-  branch \2/\3
+  branch \2
 end match
 
 ### Ignore ignorables
-match /${PROJECTS_TO_IGNORE}/
+match /${IGNORED_PROJECTS}/
 end match
 
 

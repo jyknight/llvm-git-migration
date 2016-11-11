@@ -102,28 +102,139 @@ polly
 parallel-libs
 poolalloc
 
-Migrate, but delete retroactively:
+Migrate into mono-repo, but delete retroactively:
 hlvm # delete after r41689 (but filter out later r160869 and r160870 "test commits")
-java # delete after r37806
+java # delete after r26059
 stacker # delete after r40406
 vmkit # delete after r219392
 
 
-Leave out of monorepo:
+Migrate to a separate repositories:
+lnt
+test-suite
+www # The website
+www-pubs # More the website
+www-releases # More the website
+zorg # The buildbot infrastructure
+
+Don't make a git conversion at all:
 clang-tests # Copy of GCC 4.2 testsuite, modified to work with clang
 clang-tests-external # Copy of GDB testsuite
 giri # Never actually developed here; actually https://github.com/liuml07/giri
 klee # Already migrated to github with history; https://github.com/klee/klee
 llvm-gcc-4.0 # GCC 4.0, modified for llvm
 llvm-gcc-4.2 # GCC 4.2, modified for llvm
-lnt
 llbrowse # An LLVM bitcode GUI browser
 television # A different LLVM GUI browser; shows effects of transforms, etc.
 nightly-test-server
-test-suite
 safecode # Contains a whole copy of clang??
-www # The website
-www-pubs # More the website
-www-releases # More the website
-zorg # The buildbot infrastructure
+
+
+
+
+Some things under "branches" and "tags" are directories with other stuff in them, not actually a copy of trunk.
+
+sqlite> select * from node_change where path regexp "/branches/[^/]*$" and change_type="A";
+1|0000041911|test-suite/branches/release_21|D|A||-1
+1|0000041913|llvm/branches/release_21|D|A||-1
+1|0000046175|llvm/branches/Apple|D|A||-1
+1|0000048561|llvm/branches/ggreif|D|A||-1
+1|0000050231|llvm-gcc-4.2/branches/Apple|D|A||-1
+1|0000062797|cfe/branches/Apple|D|A||-1
+1|0000087875|safecode/branches/unlabeled-1.1.2|D|A||-1
+1|0000101452|llvm-gcc-4.2/branches/ggreif|D|A||-1
+1|0000101456|cfe/branches/ggreif|D|A||-1
+1|0000101458|test-suite/branches/ggreif|D|A||-1
+1|0000104458|llvm/branches/wendling|D|A||-1
+1|0000124731|lldb/branches/apple|D|A||-1
+1|0000134073|llvm/branches/GSoC|D|A||-1
+1|0000168115|llvm/branches/google|D|A||-1
+1|0000168152|cfe/branches/google|D|A||-1
+1|0000168153|clang-tools-extra/branches/google|D|A||-1
+1|0000168154|compiler-rt/branches/google|D|A||-1
+1|0000177017|lldb/branches/google|D|A||-1
+1|0000177017|polly/branches/google|D|A||-1
+1|0000195627|vmkit/branches/mcjit|D|A||-1
+
+sqlite> select * from node_change where path regexp "/tags/[^/]*$" and change_type="A" and path not regexp ".*/tags/RELEASE_[0-9]*";
+1|0000039937|llvm/tags/Apple|D|A||-1
+1|0000043976|llvm-gcc-4.0/tags/Apple|D|A||-1
+1|0000044085|llvm-gcc-4.2/tags/Apple|D|A||-1
+1|0000049202|llvm/tags/checker|D|A||-1
+1|0000049204|cfe/tags/checker|D|A||-1
+1|0000062626|cfe/tags/Apple|D|A||-1
+1|0000080611|llvm/tags/cremebrulee|D|A||-1
+1|0000080612|cfe/tags/cremebrulee|D|A||-1
+1|0000083187|compiler-rt/tags/Apple|D|A||-1
+1|0000168129|llvm/tags/google|D|A||-1
+1|0000168158|cfe/tags/google|D|A||-1
+1|0000168159|clang-tools-extra/tags/google|D|A||-1
+1|0000168160|compiler-rt/tags/google|D|A||-1
+1|0000177017|lldb/tags/google|D|A||-1
+1|0000177017|polly/tags/google|D|A||-1
+
+sqlite> select * from node_change where path regexp "/(tags|branches)/[^/]*$" and (base_path is null or base_path not regexp ".*/(trunk|(branches|tags)/[^/]+)") and path not like "%/tags/RELEASE_%";
+1|0000039937|llvm/tags/Apple|D|A||-1
+1|0000041911|test-suite/branches/release_21|D|A||-1
+1|0000041913|llvm/branches/release_21|D|A||-1
+1|0000043976|llvm-gcc-4.0/tags/Apple|D|A||-1
+1|0000044085|llvm-gcc-4.2/tags/Apple|D|A||-1
+1|0000046175|llvm/branches/Apple|D|A||-1
+1|0000048561|llvm/branches/ggreif|D|A||-1
+1|0000049202|llvm/tags/checker|D|A||-1
+1|0000049204|cfe/tags/checker|D|A||-1
+1|0000050231|llvm-gcc-4.2/branches/Apple|D|A||-1
+1|0000062626|cfe/tags/Apple|D|A||-1
+1|0000062797|cfe/branches/Apple|D|A||-1
+1|0000080611|llvm/tags/cremebrulee|D|A||-1
+1|0000080612|cfe/tags/cremebrulee|D|A||-1
+1|0000083187|compiler-rt/tags/Apple|D|A||-1
+1|0000087875|safecode/branches/unlabeled-1.1.2|D|A||-1
+1|0000101452|llvm-gcc-4.2/branches/ggreif|D|A||-1
+1|0000101456|cfe/branches/ggreif|D|A||-1
+1|0000101458|test-suite/branches/ggreif|D|A||-1
+1|0000104458|llvm/branches/wendling|D|A||-1
+1|0000124731|lldb/branches/apple|D|A||-1
+1|0000134073|llvm/branches/GSoC|D|A||-1
+1|0000168115|llvm/branches/google|D|A||-1
+1|0000168129|llvm/tags/google|D|A||-1
+1|0000168152|cfe/branches/google|D|A||-1
+1|0000168153|clang-tools-extra/branches/google|D|A||-1
+1|0000168154|compiler-rt/branches/google|D|A||-1
+1|0000168158|cfe/tags/google|D|A||-1
+1|0000168159|clang-tools-extra/tags/google|D|A||-1
+1|0000168160|compiler-rt/tags/google|D|A||-1
+1|0000177017|lldb/branches/google|D|A||-1
+1|0000177017|lldb/tags/google|D|A||-1
+1|0000177017|polly/branches/google|D|A||-1
+1|0000177017|polly/tags/google|D|A||-1
+1|0000195627|vmkit/branches/mcjit|D|A||-1
+
+
+
+Looking at this to check for sanity of conversion:
+git log -m --no-renames --pretty=format: --name-only --diff-filter=A --all | pyuniq > /tmp/all-files
+
+
+
+TODO need to rename some branches:
+error: cannot lock ref 'refs/heads/tags/RELEASE_28/rc0': 'refs/heads/tags/RELEASE_28' exists; cannot create 'refs/heads/tags/RELEASE_28/rc0'
+error: cannot lock ref 'refs/heads/tags/RELEASE_28/rc1': 'refs/heads/tags/RELEASE_28' exists; cannot create 'refs/heads/tags/RELEASE_28/rc1'
+error: cannot lock ref 'refs/heads/tags/RELEASE_28/rc2': 'refs/heads/tags/RELEASE_28' exists; cannot create 'refs/heads/tags/RELEASE_28/rc2'
+error: cannot lock ref 'refs/heads/tags/RELEASE_28/rc3': 'refs/heads/tags/RELEASE_28' exists; cannot create 'refs/heads/tags/RELEASE_28/rc3'
+error: cannot lock ref 'refs/heads/tags/RELEASE_28/rc0': 'refs/heads/tags/RELEASE_28' exists; cannot create 'refs/heads/tags/RELEASE_28/rc0'
+error: cannot lock ref 'refs/heads/tags/RELEASE_28/rc1': 'refs/heads/tags/RELEASE_28' exists; cannot create 'refs/heads/tags/RELEASE_28/rc1'
+error: cannot lock ref 'refs/heads/tags/RELEASE_28/rc2': 'refs/heads/tags/RELEASE_28' exists; cannot create 'refs/heads/tags/RELEASE_28/rc2'
+error: cannot lock ref 'refs/heads/tags/RELEASE_28/rc3': 'refs/heads/tags/RELEASE_28' exists; cannot create 'refs/heads/tags/RELEASE_28/rc3'
+error: cannot lock ref 'refs/heads/branches/apple': 'refs/heads/branches/apple/calcite' exists; cannot create 'refs/heads/branches/apple'
+error: cannot lock ref 'refs/heads/tags/RELEASE_28/rc0': 'refs/heads/tags/RELEASE_28' exists; cannot create 'refs/heads/tags/RELEASE_28/rc0'
+error: cannot lock ref 'refs/heads/tags/RELEASE_28/rc1': 'refs/heads/tags/RELEASE_28' exists; cannot create 'refs/heads/tags/RELEASE_28/rc1'
+error: cannot lock ref 'refs/heads/tags/RELEASE_28/rc2': 'refs/heads/tags/RELEASE_28' exists; cannot create 'refs/heads/tags/RELEASE_28/rc2'
+error: cannot lock ref 'refs/heads/tags/RELEASE_28/rc3': 'refs/heads/tags/RELEASE_28' exists; cannot create 'refs/heads/tags/RELEASE_28/rc3'
+error: cannot lock ref 'refs/heads/branches/apple': 'refs/heads/branches/apple/calcite' exists; cannot create 'refs/heads/branches/apple'
+error: cannot lock ref 'refs/heads/tags/RELEASE_28/rc0': 'refs/heads/tags/RELEASE_28' exists; cannot create 'refs/heads/tags/RELEASE_28/rc0'
+error: cannot lock ref 'refs/heads/tags/RELEASE_28/rc1': 'refs/heads/tags/RELEASE_28' exists; cannot create 'refs/heads/tags/RELEASE_28/rc1'
+error: cannot lock ref 'refs/heads/tags/RELEASE_28/rc2': 'refs/heads/tags/RELEASE_28' exists; cannot create 'refs/heads/tags/RELEASE_28/rc2'
+error: cannot lock ref 'refs/heads/tags/RELEASE_28/rc3': 'refs/heads/tags/RELEASE_28' exists; cannot create 'refs/heads/tags/RELEASE_28/rc3'
+
 
