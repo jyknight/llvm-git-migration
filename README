@@ -213,28 +213,9 @@ sqlite> select * from node_change where path regexp "/(tags|branches)/[^/]*$" an
 
 
 Looking at this to check for sanity of conversion:
-git log -m --no-renames --pretty=format: --name-only --diff-filter=A --all | pyuniq > /tmp/all-files
+git log -m --no-renames --pretty=format: --name-only --diff-filter=A --all | pyuniq > ../all-files
+for x in $(git show-ref|cut -d' ' -f2); do git ls-tree -r --full-tree $x; done |cut -f2 | pyuniq > ../head-files
 
-
-
-TODO need to rename some branches:
-error: cannot lock ref 'refs/heads/tags/RELEASE_28/rc0': 'refs/heads/tags/RELEASE_28' exists; cannot create 'refs/heads/tags/RELEASE_28/rc0'
-error: cannot lock ref 'refs/heads/tags/RELEASE_28/rc1': 'refs/heads/tags/RELEASE_28' exists; cannot create 'refs/heads/tags/RELEASE_28/rc1'
-error: cannot lock ref 'refs/heads/tags/RELEASE_28/rc2': 'refs/heads/tags/RELEASE_28' exists; cannot create 'refs/heads/tags/RELEASE_28/rc2'
-error: cannot lock ref 'refs/heads/tags/RELEASE_28/rc3': 'refs/heads/tags/RELEASE_28' exists; cannot create 'refs/heads/tags/RELEASE_28/rc3'
-error: cannot lock ref 'refs/heads/tags/RELEASE_28/rc0': 'refs/heads/tags/RELEASE_28' exists; cannot create 'refs/heads/tags/RELEASE_28/rc0'
-error: cannot lock ref 'refs/heads/tags/RELEASE_28/rc1': 'refs/heads/tags/RELEASE_28' exists; cannot create 'refs/heads/tags/RELEASE_28/rc1'
-error: cannot lock ref 'refs/heads/tags/RELEASE_28/rc2': 'refs/heads/tags/RELEASE_28' exists; cannot create 'refs/heads/tags/RELEASE_28/rc2'
-error: cannot lock ref 'refs/heads/tags/RELEASE_28/rc3': 'refs/heads/tags/RELEASE_28' exists; cannot create 'refs/heads/tags/RELEASE_28/rc3'
-error: cannot lock ref 'refs/heads/branches/apple': 'refs/heads/branches/apple/calcite' exists; cannot create 'refs/heads/branches/apple'
-error: cannot lock ref 'refs/heads/tags/RELEASE_28/rc0': 'refs/heads/tags/RELEASE_28' exists; cannot create 'refs/heads/tags/RELEASE_28/rc0'
-error: cannot lock ref 'refs/heads/tags/RELEASE_28/rc1': 'refs/heads/tags/RELEASE_28' exists; cannot create 'refs/heads/tags/RELEASE_28/rc1'
-error: cannot lock ref 'refs/heads/tags/RELEASE_28/rc2': 'refs/heads/tags/RELEASE_28' exists; cannot create 'refs/heads/tags/RELEASE_28/rc2'
-error: cannot lock ref 'refs/heads/tags/RELEASE_28/rc3': 'refs/heads/tags/RELEASE_28' exists; cannot create 'refs/heads/tags/RELEASE_28/rc3'
-error: cannot lock ref 'refs/heads/branches/apple': 'refs/heads/branches/apple/calcite' exists; cannot create 'refs/heads/branches/apple'
-error: cannot lock ref 'refs/heads/tags/RELEASE_28/rc0': 'refs/heads/tags/RELEASE_28' exists; cannot create 'refs/heads/tags/RELEASE_28/rc0'
-error: cannot lock ref 'refs/heads/tags/RELEASE_28/rc1': 'refs/heads/tags/RELEASE_28' exists; cannot create 'refs/heads/tags/RELEASE_28/rc1'
-error: cannot lock ref 'refs/heads/tags/RELEASE_28/rc2': 'refs/heads/tags/RELEASE_28' exists; cannot create 'refs/heads/tags/RELEASE_28/rc2'
-error: cannot lock ref 'refs/heads/tags/RELEASE_28/rc3': 'refs/heads/tags/RELEASE_28' exists; cannot create 'refs/heads/tags/RELEASE_28/rc3'
-
+grep HistoricalNotes/2000-11-18-EarlyDesignIdeas.txt ../all-files
+grep include/clang/Basic/SourceManager.h ../all-files
 

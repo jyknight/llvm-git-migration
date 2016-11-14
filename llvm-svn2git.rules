@@ -6,8 +6,8 @@ declare SEPARATED_PROJECTS=(lnt|test-suite|www|www-pubs|www-releases) # TODO
 declare IGNORED_PROJECTS=(clang-tests|clang-tests-external|giri|klee|llvm-gcc-4.0|llvm-gcc-4.2|lnt|llbrowse|television|nightly-test-server|test-suite|safecode|www|www-pubs|www-releases|zorg|elp|llvm-gcc-4-2|lold|tmp|core|llvm-top|sample|support|website)
 
 # Some branches are at a different level. Enumerate those.
-declare NESTED_BRANCHNAMES=(?:Apple|apple|checker|cremebrulee|google|ggreif|GSoC)
-declare BRANCH_PATTERNS=(tags/RELEASE_[^/]+/(?:final|Final|rc[0-9]+|dot[0-9]+[^/]*/)|tags/google/[^/]+/[^/]+/|(?:tags|branches)/(?:${NESTED_BRANCHNAMES}/|)[^/]+)
+declare NESTED_BRANCHNAMES=(?:Apple/1040|Apple|apple|checker|cremebrulee|google|ggreif|GSoC|wendling)
+declare BRANCH_PATTERNS=(tags/RELEASE_[^/]+/(?:final|Final|rc[0-9]+|dot[0-9]+[^/]*)|tags/google/[^/]+/[^/]+|(?:tags|branches)/(?:${NESTED_BRANCHNAMES}/|)[^/]+)
 
 create repository monorepo
 end repository
@@ -85,6 +85,8 @@ match /cfe/${BRANCH_PATTERNS}/
   prefix clang/
   # A '~' in one branch name (Apple/clang-6~1) makes git unhappy.
   substitute branch s/~/./
+  substitute branch s!^tags/RELEASE_(28|33|34|350|35)$!tags/RELEASE_\1-FIXME!
+  substitute branch s!^branches/apple$!branches/apple-base!
 end match
 
 ### Handle gcc-plugin -> dragonegg special cases:
@@ -147,7 +149,11 @@ match /debuginfo-tests/
   max revision 113811
 end match
 
-### Delete the llvm.zip files that got checked into lldb.
+### Handle stupid crud that got got checked into lldb.
+
+# Ignore added and then removed build artifacts:
+match /lldb/trunk/build/
+end match
 
 # Ignore llvm.zip
 match /lldb/.*/llvm.zip
@@ -157,6 +163,10 @@ end match
 # handled.  (The match path doesn't trigger if the target came in
 # through a directory copy, unless you use recurse.)
 match /lldb/(tags|branches)/[^/]+/$
+  action recurse
+end match
+
+match /lldb/branches/apple/[^/]+/$
   action recurse
 end match
 
@@ -182,12 +192,16 @@ match /${MONOREPO_PROJECTS}/${BRANCH_PATTERNS}/
   repository monorepo
   prefix \1/
   branch \2
+  substitute branch s/~/./
+  substitute branch s!^tags/RELEASE_(28|33|34|350|35)$!tags/RELEASE_\1-FIXME$!
+  substitute branch s!^branches/apple$!branches/apple-base!
 end match
 
-### Ignore ignorables
+### Explicitly ignore the ignorables.
 match /${IGNORED_PROJECTS}/
 end match
 
-
 match /README.(html|txt)
 end match
+
+# Note: any unhandled paths that reach the end are an error.
