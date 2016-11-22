@@ -40,7 +40,8 @@ The script will also need to grow to handle some other stuff:
    hash?).
 4. Extracting authorship information from commit message "Patch by
    XXXX!" lines.
-5. ...I'm sure there's more.
+5. Add support for svn:mergeinfo to svn-all-fast-export (?)
+6. ...I'm sure there's more.
 
 ============
 NOTES about historical events discovered trawling through the trac db:

@@ -45,19 +45,17 @@ end match
 match /llvm/branches/ggreif/README
 end match
 
+### Ignore llvm-gcc-4.2 tags that were put under llvm/tags/Apple by accident, repeatedly.
+match /llvm/tags/Apple/.*llvmgcc42.*
+end match
+
 ### Handle cfe->clang special cases:
 
 # Skip the revisions that deleted cfe/cfe/ and moved it to cfe/
+# Note, we also skip 39735, which moved ModuleInfo.txt, because we've
+# already imported it to the right location from the get-go.
 match /
   min revision 39733
-  max revision 39734
-end match
-match /cfe.dead/
-  min revision 39735
-  max revision 39735
-end match
-match /
-  min revision 39736
   max revision 39736
 end match
 
@@ -193,7 +191,7 @@ match /${MONOREPO_PROJECTS}/${BRANCH_PATTERNS}/
   prefix \1/
   branch \2
   substitute branch s/~/./
-  substitute branch s!^tags/RELEASE_(28|33|34|350|35)$!tags/RELEASE_\1-FIXME$!
+  substitute branch s!^tags/RELEASE_(28|33|34|350|35)$!tags/RELEASE_\1-FIXME!
   substitute branch s!^branches/apple$!branches/apple-base!
 end match
 

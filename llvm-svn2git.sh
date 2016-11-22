@@ -14,7 +14,7 @@ delete_proj() {
 "
   msglen=${#msg}
   # Replace the last revision's mark with the new commit
-  last_mark=$(awk '/progress SVN/ { MARK=$7} END { print MARK }' log-monorepo)
+  last_mark=$(awk '/progress SVN r[0-9]* branch master = / { MARK=$7} END { print MARK }' log-monorepo)
 git -C monorepo fast-import --import-marks=marks-monorepo --export-marks=marks-monorepo --quiet <<EOF
 commit refs/heads/master
 mark $last_mark
@@ -28,7 +28,7 @@ EOF
 }
 
 {
-  SVNEXPORT=(svn-all-fast-export /d2/llvm-svn --rules "$mydir/llvm-svn2git.rules" --add-metadata)
+  SVNEXPORT=(svn-all-fast-export /d2/llvm-svn --only-note-toplevel-merges --rules "$mydir/llvm-svn2git.rules" --add-metadata)
 
   # We insert some deletions into master to delete some historically
   # interesting, but abandoned projects nearer to where they had been
@@ -42,5 +42,6 @@ EOF
   "${SVNEXPORT[@]}" --max-rev 219392
   delete_proj 1412844219 vmkit
   "${SVNEXPORT[@]}"
+  git -C monorepo repack -dfA --window=9999 --window-memory=1g
 } 2>&1 | tee llvm-svn2git.log
 
