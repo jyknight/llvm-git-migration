@@ -85,6 +85,8 @@ match /cfe/${BRANCH_PATTERNS}/
   substitute branch s/~/./
   substitute branch s!^tags/RELEASE_(28|33|34|350|35)$!tags/RELEASE_\1-FIXME!
   substitute branch s!^branches/apple$!branches/apple-base!
+  substitute branch s!^tags/!svntag/!
+  substitute branch s!^branches/!!
 end match
 
 ### Handle gcc-plugin -> dragonegg special cases:
@@ -147,35 +149,19 @@ match /debuginfo-tests/
   max revision 113811
 end match
 
-### Handle stupid crud that got got checked into lldb.
-
-# Ignore added and then removed build artifacts:
+# Ignore added and then immediately removed build artifacts:
 match /lldb/trunk/build/
 end match
 
-# Ignore llvm.zip
-match /lldb/.*/llvm.zip
-end match
+# Note: filtering of llvm.zip is done as a post-processing step,
+# because it's copied into a bunch of branches, and filtering contents
+# of partial-branch copies is tricky.
 
-# Ensure that the rule above, removing llvm.zip, gets appropriately
-# handled.  (The match path doesn't trigger if the target came in
-# through a directory copy, unless you use recurse.)
-match /lldb/(tags|branches)/[^/]+/$
-  action recurse
-end match
-
-match /lldb/branches/apple/[^/]+/$
-  action recurse
-end match
-
-match /lldb/branches/apple/calcite/lldb/$
-  action recurse
-end match
-
+# lldb has a silly-named branch
 match /lldb/branches/apple/calcite/lldb/
   repository monorepo
   prefix lldb/
-  branch branches/apple/calcite
+  branch apple/calcite
 end match
 
 ### Handle generic projects
@@ -193,6 +179,8 @@ match /${MONOREPO_PROJECTS}/${BRANCH_PATTERNS}/
   substitute branch s/~/./
   substitute branch s!^tags/RELEASE_(28|33|34|350|35)$!tags/RELEASE_\1-FIXME!
   substitute branch s!^branches/apple$!branches/apple-base!
+  substitute branch s!^tags/!svntag/!
+  substitute branch s!^branches/!!
 end match
 
 ### Explicitly ignore the ignorables.

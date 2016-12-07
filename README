@@ -17,31 +17,39 @@ email.
 
 TBD, but the info is there.
 
+
 3. After attempting to use a few tools (git-svn, reposurgeon), and
 having them blow up in varied ways, it appears as if the a tool that
 will actually work is the KDE project's "svn2git" aka
 "svn-all-fast-export" project. It can be found at
 <https://github.com/svn-all-fast-export/svn2git.git>.
 
-So, working on a rules file for it, in llvm-svn2git.rules.
+...needed a couple patches, use the version at:
+<https://github.com/jyknight/svn2git.git>
 
-Driver script at:
-llvm-svn2git.sh
+Working on a rules file for it in llvm-svn2git.rules, and a driver
+script in 'llvm-svn2git.sh'
 
-The script will also need to grow to handle some other stuff:
+...Welp, then turned out I also needed to rewrite 'git filter-branch',
+because it's horribly horribly slow. The generic infrastructure for
+that lives in fast_filter_branch.py, the llvm-specific rules in
+llvm_filter.py.
 
-1. Fixing up branch points: multiple commits are used to make each
-   branch, so the branch creation is uglier than necessary (deleting a
-   bunch of files during the initial branch, then re-adding them in
-   the next merge-commit) -- those commits should be collapsed into
-   one, also removing the non-linear history.
-2. Fixing tags (so that they are tags, not branches).
+I also used that module for fixup-tags.py.
+
+More things to be done:
 3. Editing commit messages (do we want to replace r12345 -> git
    hash?).
 4. Extracting authorship information from commit message "Patch by
    XXXX!" lines.
 5. Add support for svn:mergeinfo to svn-all-fast-export (?)
 6. ...I'm sure there's more.
+
+
+
+
+
+
 
 ============
 NOTES about historical events discovered trawling through the trac db:

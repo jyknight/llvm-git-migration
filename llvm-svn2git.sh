@@ -4,7 +4,8 @@ set -x
 set -u
 set -e
 
-mydir=$(dirname $0)
+mydir=$(cd $(dirname $0) && pwd)
+SVNEXPORT=(svn-all-fast-export /d2/llvm-svn --only-note-toplevel-merges --rules "$mydir/llvm-svn2git.rules" --add-metadata)
 
 delete_proj() {
   time=$1
@@ -27,12 +28,14 @@ D $proj
 EOF
 }
 
-{
-  SVNEXPORT=(svn-all-fast-export /d2/llvm-svn --only-note-toplevel-merges --rules "$mydir/llvm-svn2git.rules" --add-metadata)
-
+initial_import() {
   # We insert some deletions into master to delete some historically
   # interesting, but abandoned projects nearer to where they had been
   # abandoned
+  mkdir pristine
+
+  # Run svn2git to make a repository
+  cd pristine
   "${SVNEXPORT[@]}" --max-rev 26059
   delete_proj 1139395770 java
   "${SVNEXPORT[@]}" --max-rev 40406
@@ -42,6 +45,74 @@ EOF
   "${SVNEXPORT[@]}" --max-rev 219392
   delete_proj 1412844219 vmkit
   "${SVNEXPORT[@]}"
-  git -C monorepo repack -dfA --window=9999 --window-memory=1g
-} 2>&1 | tee llvm-svn2git.log
+  cd ..
+
+  # Clone it into another dir
+  git clone --mirror pristine/monorepo monorepo
+
+  cd monorepo
+
+  # Disable gc.
+  git config gc.auto 0
+
+  # Run postprocessing steps...
+  $mydir/llvm_filter.py
+  $mydir/fixup-tags.py
+
+  # Delete backup refs
+  git for-each-ref --format="delete %(refname)" refs/original/ refs/pre-fixup-tags/ | git update-ref --stdin
+
+  # Now, repack the processed repository tightly, and mark the
+  # resulting packfile as "keep", so future repacks won't touch it.
+  git repack -adf --window=9999 --window-memory=1g
+  git prune
+  for x in objects/pack/*.pack; do
+    echo 'Base filtered repo packfile' > "${x%.pack}.keep"
+  done
+  cd ..
+  # Copy the tightly-compressed packfile from monorepo back to
+  # pristine/monorepo (with .keep file):
+  cp -l monorepo/objects/pack/*.pack pristine/monorepo/objects/pack/
+  # And repack the *other* objects (that were filtered out in the
+  # post-processing) in the pristine monorepo into another packfile.
+  # (This reduces the space-wastage here a bit).
+  git -C pristine/monorepo repack -ad
+
+  touch initial_import_done
+}
+
+incremental_update() {
+  # Handle incremental updates to an existing conversion.
+  # First, update pristine:
+  cd pristine
+  "${SVNEXPORT[@]}"
+  cd ..
+
+  cd monorepo
+  # We will temporarily borrow objects from the pristine repo for the
+  # filtered repo, while we re-run the filter step.  (this basically
+  # accomplishes "git fetch", except without actually copying objects)
+  export GIT_ALTERNATE_OBJECT_DIRECTORIES=../pristine/monorepo/objects
+  git for-each-ref --format 'delete %(refname)' | git update-ref --stdin
+  git -C ../pristine/monorepo for-each-ref --format 'create %(refname) %(objectname)' | git update-ref --stdin
+
+  # Now, re-run the filtering:
+  $mydir/llvm_filter.py
+  $mydir/fixup-tags.py
+
+  # Delete backup refs
+  git for-each-ref --format="delete %(refname)" refs/original/ refs/pre-fixup-tags/ | git update-ref --stdin
+
+  # And, repack the new objects, which makes the repo self-contained again.
+  git repack -ad
+  unset GIT_ALTERNATE_OBJECT_DIRECTORIES
+  cd ..
+}
+
+if [ -e initial_import_done ]; then
+  incremental_update 2>&1 | tee llvm-svn2git-update.log
+else
+  initial_import 2>&1 | tee llvm-svn2git.log
+fi
+
 
