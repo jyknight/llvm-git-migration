@@ -6,20 +6,20 @@ couple of techniques:
 3. Uses batch commands like 'git fast-import' and 'git cat-file
    --batch', instead of invoking a subprocess for every little operation.
 
-To use, import this module from your own script, and call the function do_filter().
+To use, import this module from your own script, and call the function
+do_filter().
 
 TODO ideas:
 - Release as a standalone project.
 - Add some sort of commandline interface.
 - Add ability to specify refs to rewrite and to exclude.
 - ...
+
 """
 
-import sys
-import subprocess
-import threading
 import collections
 import os
+import subprocess
 
 try:
   # Attempt to use https://pypi.python.org/pypi/regex
@@ -27,18 +27,21 @@ try:
   import regex
   supports_partial = True
 except ImportError:
-  print "WARNING: could not import regex module; falling back to re module, will be slower..."
+  print ('WARNING: could not import regex module; falling back to re module, '
+         'will be slower...')
   import re as regex
   supports_partial = False
+
 
 class defaultdict(collections.defaultdict):
   __repr__ = dict.__repr__
 
+
 GIT_EMPTY_TREE_HASH = '4b825dc642cb6eb9a060e54bf8d69288fbee4904'
 ALL_ZERO_HASH = '0000000000000000000000000000000000000000'
 
-def object_type(mode):
-  "Convert from git mode string to a git object type"
+def object_type_from_mode(mode):
+  """Convert from git mode string to a git object type"""
   if mode == '40000':
     return 'tree'
   elif mode == '160000':
@@ -50,8 +53,8 @@ def object_type(mode):
 class Commit(object):
   """Represents one commit object from Git."""
 
-  __slots__=['tree', 'parents', 'author', 'author_date', 'committer',
-             'committer_date', 'msg']
+  __slots__ = ['tree', 'parents', 'author', 'author_date', 'committer',
+               'committer_date', 'msg']
 
   def __init__(self, tree=None, parents=None, author=None, author_date=None,
                committer=None, committer_date=None, msg=None):
@@ -59,7 +62,7 @@ class Commit(object):
     self.parents = parents
     if parents is None:
       self.parents = []
-    self.author=author
+    self.author = author
     self.author_date = author_date
     self.committer = committer
     self.committer_date = committer_date
@@ -82,14 +85,16 @@ class Commit(object):
   def __ne__(self, other):
     return not self.__eq__(other)
 
+
 class Tag(object):
   """Represents one tag object from Git."""
+
   def __init__(self, object_hash=None, object_type=None, name=None,
                tagger=None, tagger_date=None, msg=None):
     self.object_hash = object_hash
     self.object_type = object_type
     self.name = name
-    self.tagger=tagger
+    self.tagger = tagger
     self.tagger_date = tagger_date
     self.msg = msg
 
@@ -109,19 +114,20 @@ class Tag(object):
   def __ne__(self, other):
     return not self.__eq__(other)
 
+
 class TreeEntry(object):
   """Represents one directory/file entry in a tree object.
   Cached, thus, immutable."""
-  __slots__ = ['name', 'mode', 'hash']
+  __slots__ = ['name', 'mode', 'githash']
 
-  def __init__(self, name, mode, hash):
+  def __init__(self, name, mode, githash):
     object.__setattr__(self, 'name', name)
     object.__setattr__(self, 'mode', mode)
-    object.__setattr__(self, 'hash', hash)
+    object.__setattr__(self, 'githash', githash)
 
   def __eq__(self, other):
     return (self.name == other.name and
-            self.hash == other.hash and
+            self.githash == other.githash and
             self.mode == other.mode)
 
   def __ne__(self, other):
@@ -131,13 +137,14 @@ class TreeEntry(object):
     raise NotImplementedError
 
   def __repr__(self):
-    return "TreeEntry(%r, %r, %r)" % (self.name, self.mode, self.hash)
+    return 'TreeEntry(%r, %r, %r)' % (self.name, self.mode, self.githash)
+
 
 class CatFileInput(object):
   """Runs a 'git cat-file' subprocess to allow lookup of objects in a
   git repository."""
 
-  tree_re = regex.compile("([0-9]*) ([^\x00]*)\x00(.{20})", regex.DOTALL)
+  tree_re = regex.compile('([0-9]*) ([^\x00]*)\x00(.{20})', regex.DOTALL)
 
   def __init__(self):
     self.process = subprocess.Popen(['git', 'cat-file', '--batch'],
@@ -148,7 +155,7 @@ class CatFileInput(object):
     self.process.stdin.close()
     self.process.wait()
     if self.process.returncode != 0:
-      raise Exception("cat-file exited with non-zero exit code:",
+      raise Exception('cat-file exited with non-zero exit code:',
                       self.process.returncode)
 
   def _parse_object(self, githash):
@@ -157,11 +164,11 @@ class CatFileInput(object):
     header = self.process.stdout.readline()
     header_parts = header.split()
     if len(header_parts) != 3:
-      raise Exception("Unexpected response from cat-file", githash, header)
+      raise Exception('Unexpected response from cat-file', githash, header)
 
     response = self.process.stdout.read(int(header_parts[2]))
-    if self.process.stdout.read(1) != "\n":
-      raise Exception("Missing expected terminating newline from cat-file.")
+    if self.process.stdout.read(1) != '\n':
+      raise Exception('Missing expected terminating newline from cat-file.')
 
     return header_parts[1], response
 
@@ -170,21 +177,21 @@ class CatFileInput(object):
     'TreeEntry's in that tree."""
     files = []
     kind, response = self._parse_object(githash)
-    if kind != "tree":
-      raise Exception("Unexpected object kind: %r is a %r not a tree",
+    if kind != 'tree':
+      raise Exception('Unexpected object kind: %r is a %r not a tree',
                       githash, kind)
 
     last_pos = 0
     for entry in self.tree_re.finditer(response):
       if last_pos != entry.start():
-        raise Exception("Unexpected tree content", last_pos, entry.start(),
+        raise Exception('Unexpected tree content', last_pos, entry.start(),
                         response[last_pos:entry.start()+1])
       last_pos = entry.end()
       files.append(TreeEntry(entry.group(2), entry.group(1),
                              entry.group(3).encode('hex')))
 
     if last_pos != len(response):
-      raise Exception("Junk at end of tree?", githash, last_pos, len(response))
+      raise Exception('Junk at end of tree?', githash, last_pos, len(response))
     return files
 
   def parse_commit(self, githash):
@@ -193,8 +200,9 @@ class CatFileInput(object):
     commit = Commit()
 
     kind, response = self._parse_object(githash)
-    if kind != "commit":
-      Exception("Unexpected object kind: %r is a %r not a commit", githash, kind)
+    if kind != 'commit':
+      Exception('Unexpected object kind: %r is a %r not a commit',
+                githash, kind)
 
     headers, commit.msg = response.split('\n\n', 1)
     for header in headers.split('\n'):
@@ -211,7 +219,7 @@ class CatFileInput(object):
         commit.committer, commit.committer_date = header_data.split('> ', 1)
         commit.committer = commit.committer + '>'
       else:
-        raise Exception("Unexpected commit header", header)
+        raise Exception('Unexpected commit header', header)
 
     return commit
 
@@ -219,8 +227,9 @@ class CatFileInput(object):
     tag = Tag()
 
     kind, response = self._parse_object(githash)
-    if kind != "tag":
-      Exception("Unexpected object kind: %r is a %r not a commit", githash, kind)
+    if kind != 'tag':
+      Exception('Unexpected object kind: %r is a %r not a commit',
+                githash, kind)
 
     headers, tag.msg = response.split('\n\n', 1)
     for header in headers.split('\n'):
@@ -236,13 +245,14 @@ class CatFileInput(object):
         tag.tagger, tag.tagger_date = header_data.split('> ', 1)
         tag.tagger = tag.tagger + '>'
       else:
-        raise Exception("Unexpected tag header", header)
+        raise Exception('Unexpected tag header', header)
 
     return tag
 
   def get_object_type(self, githash):
     kind, response = self._parse_object(githash)
     return kind
+
 
 class FastImportStream(object):
   """Runs a "git fast-import" subprocess to allow importing objects into
@@ -259,11 +269,11 @@ class FastImportStream(object):
     # Delete the temporary refname we added
     self.reset_ref(self.tmp_refname, ALL_ZERO_HASH)
     # Close everything down
-    self.process.stdin.write("done\n")
+    self.process.stdin.write('done\n')
     self.process.stdin.close()
     self.process.wait()
     if self.process.returncode:
-      raise Exception("fast-import exited with non-zero exit code:",
+      raise Exception('fast-import exited with non-zero exit code:',
                       self.process.returncode)
 
   def write_commit(self, commit):
@@ -272,28 +282,28 @@ class FastImportStream(object):
     of other commits)."""
     mark = self.next_mark
     self.next_mark += 1
-    s = ("commit %s\n"
-         "mark :%d\n"
-         "author %s %s\n"
-         "committer %s %s\n"
-         "data %d\n"
-         "%s\n"
-         "from %s\n"
+    s = ('commit %s\n'
+         'mark :%d\n'
+         'author %s %s\n'
+         'committer %s %s\n'
+         'data %d\n'
+         '%s\n'
+         'from %s\n'
          ) % (self.tmp_refname, mark, commit.author, commit.author_date,
               commit.committer, commit.committer_date, len(commit.msg),
               commit.msg, ALL_ZERO_HASH)
     for p in commit.parents:
-        s += "merge %s\n" % p
-    s += "M 40000 %s \n\n" % commit.tree
+        s += 'merge %s\n' % p
+    s += 'M 40000 %s \n\n' % commit.tree
     self.process.stdin.write(s)
-    return ":%d" % mark
+    return ':%d' % mark
 
   def write_tag(self, tag):
-    s = ("tag %s\n"
-         "from %s\n"
-         "tagger %s %s\n"
-         "data %d\n"
-         "%s\n") % (
+    s = ('tag %s\n'
+         'from %s\n'
+         'tagger %s %s\n'
+         'data %d\n'
+         '%s\n') % (
              tag.name, tag.object_hash, tag.tagger, tag.tagger_date,
              len(tag.msg), tag.msg)
     self.process.stdin.write(s)
@@ -301,12 +311,13 @@ class FastImportStream(object):
   def reset_ref(self, ref, commit):
     """Sets the named 'ref' to point to the named 'commit'. (Can set it to
     a hash or a mark)"""
-    self.process.stdin.write("reset %s\nfrom %s\n\n" % (ref, commit))
+    self.process.stdin.write('reset %s\nfrom %s\n\n' % (ref, commit))
 
   def get_mark(self, mark):
     """Returns the SHA1 corresponding to a mark"""
-    self.process.stdin.write("get-mark %s\n" % (mark,))
+    self.process.stdin.write('get-mark %s\n' % (mark,))
     return self.process.stdout.readline().rstrip()
+
 
 class TreeImportStream(object):
   """Runs a 'git mktree' subprocess to create trees without commits
@@ -320,18 +331,19 @@ class TreeImportStream(object):
     self.process.stdin.close()
     self.process.wait()
     if self.process.returncode != 0:
-      raise Exception("mktree exited with non-zero exit code:",
+      raise Exception('mktree exited with non-zero exit code:',
                       self.process.returncode)
 
   def write_tree(self, files):
     """Given a list of 'TreeEntry's, create a git tree object, and return
     its hash."""
-    s = '\x00'.join('%s %s %s\t%s' % (f.mode, object_type(f.mode),
-                                      f.hash, f.name)
+    s = '\x00'.join('%s %s %s\t%s' % (f.mode, object_type_from_mode(f.mode),
+                                      f.githash, f.name)
                     for f in files)
     s += '\x00\x00'
     self.process.stdin.write(s)
     return self.process.stdout.readline().strip()
+
 
 class FilterManager(object):
   """Wrapper for the above git import/read functionality."""
@@ -391,7 +403,10 @@ class FilterManager(object):
   def reset_ref(self, ref, githash):
     self._fast_import.reset_ref(ref, githash)
 
+
 UNSET = object()
+
+
 class GlobalTreeTransformer(object):
   """Utility to transform files in a tree, based only on the existing
   contents, not on which commit points to it.
@@ -415,7 +430,7 @@ class GlobalTreeTransformer(object):
     for (path,action) in file_changes:
       if not path.startswith('.*'):
         self._matchers_prefix_sensitive = True
-    self._transforms = [(regex.compile(path+'$'), action)
+    self._transforms = [(regex.compile(path + '$'), action)
                         for (path, action) in file_changes]
 
     self._stat_tree_cache_hits = 0
@@ -424,11 +439,11 @@ class GlobalTreeTransformer(object):
     self._stat_transforms = 0
 
   def dump_stats(self):
-    print "GlobalTreeTransformer statistics:"
-    print "  Tree cache hits:   %8d" % self._stat_tree_cache_hits
-    print "  Trees retrieved:   %8d" % self._stat_got_trees
-    print "  Trees written:     %8d" % self._stat_wrote_trees
-    print "  Transforms called: %8d" % self._stat_transforms
+    print 'GlobalTreeTransformer statistics:'
+    print '  Tree cache hits:   %8d' % self._stat_tree_cache_hits
+    print '  Trees retrieved:   %8d' % self._stat_got_trees
+    print '  Trees written:     %8d' % self._stat_wrote_trees
+    print '  Transforms called: %8d' % self._stat_transforms
 
   def transform(self, oldtreehash):
     finaltree = self._transform_internal(
@@ -438,7 +453,8 @@ class GlobalTreeTransformer(object):
       return GIT_EMPTY_TREE_HASH
     return finaltree
 
-  def _transform_internal(self, prefix, oldtreehash, cur_transforms, cur_prefix_sensitive):
+  def _transform_internal(self, prefix, oldtreehash, cur_transforms,
+                          cur_prefix_sensitive):
     if cur_prefix_sensitive:
       cache_prefix = prefix
     else:
@@ -477,7 +493,8 @@ class GlobalTreeTransformer(object):
       self._stat_got_trees += 1
       old_entries = self.manager.get_tree(treehash)
       new_entries = self.entries_transform_callback(prefix, old_entries,
-                                                    sub_transforms, sub_prefix_sensitive)
+                                                    sub_transforms,
+                                                    sub_prefix_sensitive)
 
       if not new_entries:
         treehash = None
@@ -495,21 +512,23 @@ class GlobalTreeTransformer(object):
       self._stat_transforms += 1
       return t[1](pathname, oldtreehash)
 
-  def entries_transform_callback(self, prefix, entries, transform_list, prefix_sensitive):
+  def entries_transform_callback(self, prefix, entries, transform_list,
+                                 prefix_sensitive):
     result = []
     for entry in entries:
       if entry.mode == '40000':
         newtreehash = self._transform_internal(prefix + entry.name + '/',
-                                               entry.hash, transform_list, prefix_sensitive)
+                                               entry.githash, transform_list,
+                                               prefix_sensitive)
         if newtreehash is None:
           pass
-        elif newtreehash == entry.hash:
+        elif newtreehash == entry.githash:
           result.append(entry)
         else:
           result.append(TreeEntry(entry.name, entry.mode, newtreehash))
       else:
         fullname = prefix + entry.name
-        entryhash = entry.hash
+        entryhash = entry.githash
         for t in transform_list:
           if t[0].match(fullname):
             if t[1] is None:
@@ -521,7 +540,7 @@ class GlobalTreeTransformer(object):
             if entryhash is None:
               break
         else:
-          if entryhash == entry.hash:
+          if entryhash == entry.githash:
             result.append(entry)
           else:
             result.append(TreeEntry(entry.name, entry.mode, entryhash))
@@ -529,11 +548,12 @@ class GlobalTreeTransformer(object):
 
 
 def list_refs():
-  return subprocess.check_output(['git', '-c', 'core.warnAmbiguousRefs=false', 'rev-parse', '--symbolic-full-name',
+  return subprocess.check_output(['git', '-c', 'core.warnAmbiguousRefs=false',
+                                  'rev-parse', '--symbolic-full-name',
                                   '--branches', '--tags']).split('\n')[:-1]
 
 def update_refs(fm, reflist, revmap, backup_prefix, tag_filter, msg_filter):
-  print "Updating refs..."
+  print 'Updating refs...'
 
   proc = subprocess.Popen(['git', 'for-each-ref'] + reflist,
                           stdout=subprocess.PIPE)
@@ -543,7 +563,7 @@ def update_refs(fm, reflist, revmap, backup_prefix, tag_filter, msg_filter):
     githash, kind = githash_and_kind.split(' ')
     if kind == 'commit':
       if githash in revmap:
-        print "Updating REF %s %s -> %s" % (refname, githash, revmap[githash])
+        print 'Updating REF %s %s -> %s' % (refname, githash, revmap[githash])
         if backup_prefix:
           # Create backup of original ref
           fm.reset_ref(backup_prefix + '/' + refname, githash)
@@ -551,13 +571,13 @@ def update_refs(fm, reflist, revmap, backup_prefix, tag_filter, msg_filter):
         fm.reset_ref(refname, revmap[githash])
     elif kind == 'tag':
       tagobj = fm.get_tag(githash)
-      if "refs/tags/" + tagobj.name != refname:
-        print "WARNING: tag %s has mismatched tagname: %s" % (
+      if 'refs/tags/' + tagobj.name != refname:
+        print 'WARNING: tag %s has mismatched tagname: %s' % (
             refname, tagobj.name)
         continue
 
-      if tagobj.object_type != "commit":
-        print "WARNING: tag %s points to %s, not to a commit" % (
+      if tagobj.object_type != 'commit':
+        print 'WARNING: tag %s points to %s, not to a commit' % (
             refname, tagobj.object_type)
         continue
 
@@ -576,28 +596,28 @@ def update_refs(fm, reflist, revmap, backup_prefix, tag_filter, msg_filter):
       if msg_filter is not None:
         tagobj.msg = msg_filter(tagobj.msg)
       if tag_filter is not None:
-        tagobj = tag_filter(tagobj)
+        tagobj = tag_filter(fm, tagobj)
 
       if tagobj != oldtagobj:
-        print "Updating TAG %s" % (refname,)
+        print 'Updating TAG %s' % (refname,)
         if backup_prefix:
           # Create backup ref
           fm.reset_ref(backup_prefix + '/' + refname, githash)
         fm.write_tag(tagobj)
         if was_signed:
-          print "WARNING: stripped signature from tag %s (%s)" % (
-              tagname, githash)
+          print 'WARNING: stripped signature from tag %s (%s)' % (
+              refname, githash)
     else:
-      raise Exception("Unexpected ref to kind", kind)
+      raise Exception('Unexpected ref to kind', kind)
 
   proc.wait()
   if proc.returncode != 0:
-    raise Exception("for-each-ref exited with non-zero exit code:",
+    raise Exception('for-each-ref exited with non-zero exit code:',
                     proc.returncode)
 
 def do_filter(commit_filter=None, tag_filter=None, global_file_actions=None,
               prefix_sensitive=True, msg_filter=None,
-              backup_prefix="refs/original", revmap_filename=None):
+              backup_prefix='refs/original', revmap_filename=None):
   fm = FilterManager()
 
   if global_file_actions:
@@ -606,7 +626,7 @@ def do_filter(commit_filter=None, tag_filter=None, global_file_actions=None,
     gtt = None
 
   reflist = list_refs()
-  print "Getting list of commits..."
+  print 'Getting list of commits...'
   # Get list of commits to work on:
   revlist = subprocess.check_output(['git', 'rev-list', '--reverse',
                                      '--topo-order'] + reflist).split('\n')[:-1]
@@ -616,11 +636,11 @@ def do_filter(commit_filter=None, tag_filter=None, global_file_actions=None,
   else:
     revmap={}
 
-  print "Filtering..."
+  print 'Filtering...'
   progress = 0
   for rev in revlist:
     if progress % 100 == 0:
-      print " [%d/%d]\r" % (progress, len(revlist)),
+      print ' [%d/%d]\r' % (progress, len(revlist)),
 
     if rev in revmap:
       # If this commit was already processed (with an input revmap), skip
@@ -644,17 +664,17 @@ def do_filter(commit_filter=None, tag_filter=None, global_file_actions=None,
   update_refs(fm, reflist, revmap, backup_prefix, tag_filter, msg_filter)
 
   if revmap_filename:
-    revmap_out = open(revmap_filename+'.tmp', 'w')
+    revmap_out = open(revmap_filename + '.tmp', 'w')
     for oldrev, newrev in revmap.iteritems():
       # Make sure the revs we're writing are real sha1s, not marks
       if newrev.startswith(':'):
         newrev = fm.get_mark(newrev)
-    revmap_out.write("%s %s\n" % (oldrev, newrev))
+      revmap_out.write('%s %s\n' % (oldrev, newrev))
 
   if gtt is not None:
     gtt.dump_stats()
-  print "Filtered %d commits, %d were changed." % (len(revlist), len(revmap))
+  print 'Filtered %d commits, %d were changed.' % (len(revlist), len(revmap))
   fm.close()
 
   if revmap_filename:
-    os.rename(revmap_filename+'.tmp', revmap_filename)
+    os.rename(revmap_filename + '.tmp', revmap_filename)
