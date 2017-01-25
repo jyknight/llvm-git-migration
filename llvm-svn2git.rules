@@ -62,7 +62,7 @@ end match
 # cfe was in cfe/cfe, at first
 match /cfe/cfe/trunk/
   repository monorepo
-  branch master
+  branch refs/pristine/master
   prefix clang/
 end match
 
@@ -73,20 +73,20 @@ end match
 # Also special cases for the current location of clang: we want to call it clang, not cfe.
 match /cfe/trunk/
   repository monorepo
-  branch master
+  branch refs/pristine/master
   prefix clang/
 end match
 
 match /cfe/${BRANCH_PATTERNS}/
   repository monorepo
-  branch \1
+  branch refs/pristine/\1
   prefix clang/
   # A '~' in one branch name (Apple/clang-6~1) makes git unhappy.
   substitute branch s/~/./
-  substitute branch s!^tags/RELEASE_(28|33|34|350|35)$!tags/RELEASE_\1-FIXME!
-  substitute branch s!^branches/apple$!branches/apple-base!
-  substitute branch s!^tags/!svntag/!
-  substitute branch s!^branches/!!
+  substitute branch s!^refs/pristine/tags/RELEASE_(28|33|34|350|35)$!refs/pristine/tags/RELEASE_\1-FIXME!
+  substitute branch s!^refs/pristine/branches/apple$!refs/pristine/branches/apple-base!
+  substitute branch s!^refs/pristine/tags/!refs/pristine/svntag/!
+  substitute branch s!^refs/pristine/branches/!refs/pristine/!
 end match
 
 ### Handle gcc-plugin -> dragonegg special cases:
@@ -95,7 +95,7 @@ match /gcc-plugin/
   # In this (single) revision, the files weren't in a trunk subdir yet.
   max revision 74837
   repository monorepo
-  branch master
+  branch refs/pristine/master
   prefix dragonegg/
 end match
 
@@ -109,7 +109,7 @@ match /gcc-plugin/trunk/
   # Special case: use "dragonegg" dir for /gcc-plugin.
   max revision 83829
   repository monorepo
-  branch master
+  branch refs/pristine/master
   prefix dragonegg/
 end match
 
@@ -125,7 +125,7 @@ match /compiler-rt/
   min revision 73172
   max revision 73172
   repository monorepo
-  branch master
+  branch refs/pristine/master
   prefix compiler-rt/BlocksRuntime/
 end match
 
@@ -139,7 +139,7 @@ end match
 match /debuginfo-tests/
   max revision 113804
   repository monorepo
-  branch master
+  branch refs/pristine/master
   prefix debuginfo-tests/
 end match
 
@@ -161,26 +161,26 @@ end match
 match /lldb/branches/apple/calcite/lldb/
   repository monorepo
   prefix lldb/
-  branch apple/calcite
+  branch refs/pristine/apple/calcite
 end match
 
 ### Handle generic projects
 
 match /${MONOREPO_PROJECTS}/trunk/
   repository monorepo
-  branch master
+  branch refs/pristine/master
   prefix \1/
 end match
 
 match /${MONOREPO_PROJECTS}/${BRANCH_PATTERNS}/
   repository monorepo
   prefix \1/
-  branch \2
+  branch refs/pristine/\2
   substitute branch s/~/./
-  substitute branch s!^tags/RELEASE_(28|33|34|350|35)$!tags/RELEASE_\1-FIXME!
-  substitute branch s!^branches/apple$!branches/apple-base!
-  substitute branch s!^tags/!svntag/!
-  substitute branch s!^branches/!!
+  substitute branch s!^refs/pristine/tags/RELEASE_(28|33|34|350|35)$!refs/pristine/tags/RELEASE_\1-FIXME!
+  substitute branch s!^refs/pristine/branches/apple$!refs/pristine/branches/apple-base!
+  substitute branch s!^refs/pristine/tags/!refs/pristine/svntag/!
+  substitute branch s!^refs/pristine/branches/!refs/pristine/!
 end match
 
 ### Explicitly ignore the ignorables.

@@ -20,6 +20,7 @@ TODO ideas:
 import collections
 import os
 import subprocess
+import sys
 
 try:
   # Attempt to use https://pypi.python.org/pypi/regex
@@ -114,30 +115,125 @@ class Tag(object):
   def __ne__(self, other):
     return not self.__eq__(other)
 
-
 class TreeEntry(object):
   """Represents one directory/file entry in a tree object.
   Cached, thus, immutable."""
-  __slots__ = ['name', 'mode', 'githash']
+  __slots__ = ['mode', 'githash', '_sub_entries']
 
-  def __init__(self, name, mode, githash):
-    object.__setattr__(self, 'name', name)
+  def __init__(self, mode, githash=None, sub_entries=None):
+    assert isinstance(sub_entries, (type(None), dict))
+    if sub_entries is None and githash is None:
+      raise ValueError("TreeEntry requires one of githash or sub_entries arguments")
+    if sub_entries is not None and mode != '40000':
+      raise ValueError("TreeEntry can't have sub_entries on a non-directory.")
+
     object.__setattr__(self, 'mode', mode)
     object.__setattr__(self, 'githash', githash)
+    object.__setattr__(self, '_sub_entries', sub_entries)
 
   def __eq__(self, other):
-    return (self.name == other.name and
-            self.githash == other.githash and
-            self.mode == other.mode)
+    # Note: don't consider two equal if they don't have a githash.
+    if self is other:
+      return True
+    return (self.mode == other.mode and
+            self.githash is not None and
+            other.githash is not None and
+            self.githash == other.githash)
 
   def __ne__(self, other):
     return not self.__eq__(other)
 
-  def __setattr__(self, val):
+  def __setattr__(self, name, val):
     raise NotImplementedError
 
   def __repr__(self):
-    return 'TreeEntry(%r, %r, %r)' % (self.name, self.mode, self.githash)
+    return 'TreeEntry(%r, %r)' % (self.mode, self.githash)
+
+  def get_subentries(self, fm):
+    if self.mode != '40000':
+      raise ValueError("TreeEntry can't have sub_entries on a non-directory.")
+    if self._sub_entries is None:
+      object.__setattr__(self, '_sub_entries', fm.get_tree(self.githash))
+    return self._sub_entries
+
+  def write_subentries(self, fm):
+    if self.githash is None:
+      # Write out modified subtrees if needed.
+      to_remove = []
+      for name, e in self._sub_entries.iteritems():
+        if e.githash is None:
+          e.write_subentries(fm)
+        if e.githash == GIT_EMPTY_TREE_HASH:
+          to_remove.append(name)
+
+      # Filter empty subtrees
+      for name in to_remove:
+        del self._sub_entries[name]
+
+      # Then, write out myself.
+      object.__setattr__(self, 'githash', fm.write_tree(self._sub_entries))
+
+  def remove_entry(self, fm, name):
+    assert '/' not in name
+
+    r = self.get_subentries(fm)
+    if name not in r:
+      return self
+
+    if self.githash is None:
+      del self._sub_entries[name]
+      return self
+    else:
+      r = r.copy()
+      del r[name]
+      return TreeEntry(self.mode, sub_entries = r)
+
+  def add_entry(self, fm, name, entry):
+    assert '/' not in name
+    if self.githash is None:
+      self._sub_entries[name] = entry
+      return self
+    else:
+      r = self.get_subentries(fm).copy()
+      r[name] = entry
+      return TreeEntry(self.mode, sub_entries = r)
+
+  def get_path(self, fm, pathsegs):
+    cur = self
+    for ps in pathsegs:
+      if cur.mode != '40000':
+        return None
+      cur = cur.get_subentries(fm).get(ps, None)
+      if cur is None:
+        return None
+    return cur
+
+  def remove_path(self, fm, pathsegs):
+    if len(pathsegs) == 1:
+      return self.remove_entry(fm, pathsegs[0])
+
+    r = self.get_subentries(fm)
+    if pathsegs[0] not in r:
+      return self
+    newsub = r[pathsegs[0]].remove_path(fm, pathsegs[1:])
+    return self.add_entry(fm, pathsegs[0], newsub)
+
+  def add_path(self, fm, pathsegs, newentry):
+    if len(pathsegs) == 1:
+      return self.add_entry(fm, pathsegs[0], newentry)
+
+    r = self.get_subentries(fm)
+    if pathsegs[0] in r:
+      oldsub = r[pathsegs[0]]
+      newsub = oldsub.add_path(fm, pathsegs[1:], newentry)
+      if newsub is not oldsub:
+        return self.add_entry(fm, pathsegs[0], newsub)
+      return self
+
+    newsub = TreeEntry('40000', sub_entries={})
+    return self.add_entry(
+        fm, pathsegs[0],
+        newsub.add_path(fm, pathsegs[1:], newentry))
 
 
 class CatFileInput(object):
@@ -161,7 +257,7 @@ class CatFileInput(object):
   def _parse_object(self, githash):
     """Given a git hash, reads the object and returns (object_kind, contents)"""
     self.process.stdin.write('%s\n' % githash)
-    header = self.process.stdout.readline()
+    header = self.process.stdout.read(40) + self.process.stdout.readline()
     header_parts = header.split()
     if len(header_parts) != 3:
       raise Exception('Unexpected response from cat-file', githash, header)
@@ -173,9 +269,9 @@ class CatFileInput(object):
     return header_parts[1], response
 
   def parse_tree(self, githash):
-    """Given a git hash representing a tree object, returns the list of
-    'TreeEntry's in that tree."""
-    files = []
+    """Given a git hash representing a tree object, returns the dict of
+    (str:TreeEntry) in that tree."""
+    files = {}
     kind, response = self._parse_object(githash)
     if kind != 'tree':
       raise Exception('Unexpected object kind: %r is a %r not a tree',
@@ -187,8 +283,8 @@ class CatFileInput(object):
         raise Exception('Unexpected tree content', last_pos, entry.start(),
                         response[last_pos:entry.start()+1])
       last_pos = entry.end()
-      files.append(TreeEntry(entry.group(2), entry.group(1),
-                             entry.group(3).encode('hex')))
+      files[entry.group(2)] = TreeEntry(entry.group(1),
+                                        entry.group(3).encode('hex'))
 
     if last_pos != len(response):
       raise Exception('Junk at end of tree?', githash, last_pos, len(response))
@@ -335,12 +431,15 @@ class TreeImportStream(object):
                       self.process.returncode)
 
   def write_tree(self, files):
-    """Given a list of 'TreeEntry's, create a git tree object, and return
+    """Given a dict of (str:TreeEntry) create a git tree object, and return
     its hash."""
-    s = '\x00'.join('%s %s %s\t%s' % (f.mode, object_type_from_mode(f.mode),
-                                      f.githash, f.name)
-                    for f in files)
-    s += '\x00\x00'
+    if files:
+      s = '\x00'.join('%s %s %s\t%s' % (f.mode, object_type_from_mode(f.mode),
+                                        f.githash, name)
+                      for name,f in files.iteritems())
+      s += '\x00\x00'
+    else:
+      s = '\x00'
     self.process.stdin.write(s)
     return self.process.stdout.readline().strip()
 
@@ -407,31 +506,30 @@ class FilterManager(object):
 UNSET = object()
 
 
-class GlobalTreeTransformer(object):
+class _TreeTransformerBase(object):
   """Utility to transform files in a tree, based only on the existing
   contents, not on which commit points to it.
 
-  Give the constructor a list of changes you want to make:
-  [(PATH, ACTION), ...]
+  file_changes should be a list of changes you want to make:
+  [(PATH_RE, ACTION), ...]
 
-  Where "PATH" is a regex to match the full pathname -- ending with a
-  slash if the final component to act upon is a directory. ACTION
-  should be "None" to delete the file entry, or a function to edit the
-  contents.
+  Where "PATH_RE" is a regex to match the full pathname -- ending with
+  a slash if the final component to act upon is a directory. ACTION
+  should be a function ``f(path, TreeEntry) -> TreeEntry``. That is,
+  given a path and a TreeEntry, returns a transformed entry.
   """
 
   def __init__(self, manager, file_changes, prefix_sensitive=True):
     self.manager = manager
-    # Map from (prefix_path, tree_hash) -> new_tree_hash
-    self._mapping = {}
 
     self._matchers_prefix_sensitive = False
     self._transforms_prefix_sensitive = prefix_sensitive
-    for (path,action) in file_changes:
-      if not path.startswith('.*'):
+    for (path_re, action) in file_changes:
+      if not path_re.startswith('.*'):
         self._matchers_prefix_sensitive = True
-    self._transforms = [(regex.compile(path + '$'), action)
-                        for (path, action) in file_changes]
+
+    self._transforms = [(regex.compile(path_re + '$'), action)
+                        for (path_re, action) in file_changes]
 
     self._stat_tree_cache_hits = 0
     self._stat_wrote_trees = 0
@@ -446,106 +544,122 @@ class GlobalTreeTransformer(object):
     print '  Transforms called: %8d' % self._stat_transforms
 
   def transform(self, oldtreehash):
+    oldtree = TreeEntry('40000', oldtreehash)
     finaltree = self._transform_internal(
-        '/', oldtreehash, self._transforms,
+        '/', oldtree, self._transforms,
         self._matchers_prefix_sensitive or self._transforms_prefix_sensitive)
     if finaltree is None:
       return GIT_EMPTY_TREE_HASH
-    return finaltree
 
-  def _transform_internal(self, prefix, oldtreehash, cur_transforms,
+    finaltree.write_subentries(self.manager)
+    return finaltree.githash
+
+
+  def _transform_internal(self, prefix, oldtree, cur_transforms,
                           cur_prefix_sensitive):
-    if cur_prefix_sensitive:
-      cache_prefix = prefix
-    else:
-      cache_prefix = None
-    treehash = self._mapping.get((cache_prefix, oldtreehash), UNSET)
-    if treehash is not UNSET:
-      self._stat_tree_cache_hits += 1
-      return treehash
-
-    treehash = oldtreehash
+    tree = oldtree
 
     if supports_partial:
       # We're using the regex module, so we get partial match support.
       sub_transforms = []
       sub_prefix_sensitive = self._transforms_prefix_sensitive
       for t in cur_transforms:
-        m = t[0].match(prefix, partial=True)
+        path_re, action = t
+        m = path_re.match(prefix, partial=True)
         if m is not None:
-          if not t[0].pattern.startswith('.*'):
+          if not path_re.pattern.startswith('.*'):
             sub_prefix_sensitive = True
           if m.partial:
             sub_transforms.append(t)
           else:
-            treehash = self.fulltree_transform_callback(prefix, treehash, t)
+            tree = self.invoke_transform_callback(prefix, tree, action)
     else:
       # The 're' module doesn't support partial matches, so we can't
       # filter regexes as we go. Oh well.
       sub_prefix_sensitive = cur_prefix_sensitive
       sub_transforms = cur_transforms
       for t in cur_transforms:
-        m = t[0].match(prefix)
+        path_re, action = t
+        m = path_re.match(prefix)
         if m is not None:
-          treehash = self.fulltree_transform_callback(prefix, treehash, t)
+          tree = self.invoke_transform_callback(prefix, tree, action)
 
-    if sub_transforms and treehash is not None:
+    if sub_transforms and tree is not None:
       self._stat_got_trees += 1
-      old_entries = self.manager.get_tree(treehash)
-      new_entries = self.entries_transform_callback(prefix, old_entries,
-                                                    sub_transforms,
-                                                    sub_prefix_sensitive)
+      tree = self.entries_transform_callback(prefix, tree,
+                                             sub_transforms,
+                                             sub_prefix_sensitive)
 
-      if not new_entries:
-        treehash = None
-      elif new_entries != old_entries:
-        self._stat_wrote_trees += 1
-        treehash = self.manager.write_tree(new_entries)
+    return tree
 
-    self._mapping[(cache_prefix, oldtreehash)] = treehash
-    return treehash
-
-  def fulltree_transform_callback(self, pathname, oldtreehash, t):
-    if t[1] is None:
-      return None
-    else:
-      self._stat_transforms += 1
-      return t[1](pathname, oldtreehash)
-
-  def entries_transform_callback(self, prefix, entries, transform_list,
+  def entries_transform_callback(self, prefix, tree, transform_list,
                                  prefix_sensitive):
-    result = []
-    for entry in entries:
+    modified = False
+    newtree = tree
+
+    for name, entry in tree.get_subentries(self.manager).items():
       if entry.mode == '40000':
-        newtreehash = self._transform_internal(prefix + entry.name + '/',
-                                               entry.githash, transform_list,
-                                               prefix_sensitive)
-        if newtreehash is None:
-          pass
-        elif newtreehash == entry.githash:
-          result.append(entry)
-        else:
-          result.append(TreeEntry(entry.name, entry.mode, newtreehash))
+        newentry = self._transform_internal(prefix + name + '/',
+                                            entry, transform_list,
+                                            prefix_sensitive)
       else:
-        fullname = prefix + entry.name
-        entryhash = entry.githash
+        fullname = prefix + name
+        newentry = entry
         for t in transform_list:
-          if t[0].match(fullname):
-            if t[1] is None:
-              entryhash = None
-            else:
-              self._stat_transforms += 1
-              entryhash = t[1](fullname, entryhash)
-
-            if entryhash is None:
+          path_re, action = t
+          if path_re.match(fullname):
+            newentry = self.invoke_transform_callback(fullname, newentry, action)
+            if newentry is None:
               break
-        else:
-          if entryhash == entry.githash:
-            result.append(entry)
-          else:
-            result.append(TreeEntry(entry.name, entry.mode, entryhash))
-    return result
 
+      if newentry is None:
+        newtree = newtree.remove_entry(self.manager, name)
+      elif newentry != entry:
+        newtree = newtree.add_entry(self.manager, name, newentry)
+
+    return newtree
+
+  def invoke_transform_callback(self, pathname, oldtree, action):
+    self._stat_transforms += 1
+    return action(self.manager, pathname, oldtree)
+    # if res is oldtree:
+    #   print "Transform for", pathname, "same tree", action
+    # else:
+    #   print "Transform for", pathname, "NEW tree", action
+    #   print "OLD::::"
+    #   print oldtree and oldtree.githash
+    #   print oldtree and oldtree._sub_entries
+    #   print "NEW::::"
+    #   print res and res.githash
+    #   print res and res._sub_entries
+    # return res
+
+class CachingTreeTransformer(_TreeTransformerBase):
+  def __init__(self, manager, file_changes=[], prefix_sensitive=True):
+    _TreeTransformerBase.__init__(self, manager, file_changes, prefix_sensitive)
+
+    # Map from (prefix_path, tree_hash) -> new_tree_hash
+    self._mapping = {}
+
+  def _transform_internal(self, prefix, oldtree, cur_transforms, cur_prefix_sensitive):
+    if cur_prefix_sensitive:
+      cache_prefix = prefix
+    else:
+      cache_prefix = None
+    assert oldtree.mode == '40000'
+    assert oldtree.githash
+    tree = self._mapping.get((cache_prefix, oldtree.githash), UNSET)
+    if tree is not UNSET:
+      self._stat_tree_cache_hits += 1
+      return tree
+
+    tree = _TreeTransformerBase._transform_internal(self, prefix, oldtree, cur_transforms, cur_prefix_sensitive)
+
+    # Make immutable
+    if tree is not None:
+      tree.write_subentries(self.manager)
+    self._mapping[(cache_prefix, oldtree.githash)] = tree
+    return tree
 
 def list_refs():
   return subprocess.check_output(['git', '-c', 'core.warnAmbiguousRefs=false',
@@ -621,7 +735,7 @@ def do_filter(commit_filter=None, tag_filter=None, global_file_actions=None,
   fm = FilterManager()
 
   if global_file_actions:
-    gtt = GlobalTreeTransformer(fm, global_file_actions, prefix_sensitive)
+    gtt = CachingTreeTransformer(fm, file_changes=global_file_actions, prefix_sensitive=prefix_sensitive)
   else:
     gtt = None
 
@@ -641,12 +755,14 @@ def do_filter(commit_filter=None, tag_filter=None, global_file_actions=None,
   for rev in revlist:
     if progress % 100 == 0:
       print ' [%d/%d]\r' % (progress, len(revlist)),
+      sys.stdout.flush()
+    progress += 1
 
     if rev in revmap:
       # If this commit was already processed (with an input revmap), skip
       continue
 
-    oldcommit = fm._cat_file.parse_commit(rev)
+    oldcommit = fm.get_commit(rev)
     commit = oldcommit.copy()
     commit.parents = [revmap.get(p, p) for p in commit.parents]
 
@@ -655,11 +771,10 @@ def do_filter(commit_filter=None, tag_filter=None, global_file_actions=None,
     if gtt is not None:
       commit.tree = gtt.transform(commit.tree)
     if commit_filter is not None:
-      commit = commit_filter(fm, commit)
+      commit = commit_filter(fm, rev, commit)
 
     if commit != oldcommit:
       revmap[rev] = fm.write_commit(commit)
-    progress += 1
 
   update_refs(fm, reflist, revmap, backup_prefix, tag_filter, msg_filter)
 

@@ -2,6 +2,7 @@
 ## svn repository, generates a list of author email mappings.
 
 import subprocess, re
+import ConfigParser
 
 rev_to_git_author = {}
 
@@ -27,7 +28,7 @@ def do_git():
 svn_authors = {}
 def do_svn():
   svn_log = subprocess.check_output(["svn", "log", "file:///d2/llvm-svn"]).split("\n")
-#  svn_log = open("/tmp/svn-log").read().split("\n")
+#  svn_log = open("/d2/llvm-svn-log").read().split("\n")
   i = 0
   while True:
     assert svn_log[i] == "------------------------------------------------------------------------"
@@ -48,7 +49,7 @@ def do_svn():
     i = i + numlines + 2
 
 svn_to_git = {}
-def do_authors():
+def gather_authors():
   for rev,author in sorted(svn_authors.iteritems()):
     git_author = rev_to_git_author.get(rev)
     if git_author:
@@ -61,12 +62,28 @@ def do_authors():
       if not svn_to_git.get(author):
         svn_to_git[author] = (rev, None, None)
 
+def gather_from_authormap():
+  cfg = ConfigParser.RawConfigParser()
+  cfg.optionxform=str # Make it case sensitive
+  cfg.read("svn-mailer.conf")
+  for author,git_author in cfg.items('authors'):
+    old_git_author = svn_to_git.get(author)
+    if not old_git_author or not old_git_author[2] or old_git_author[0] < 286094: # HACK: revision number check is because I have an old version of the authorfile.
+      if old_git_author and old_git_author[2] and git_author != old_git_author[2]:
+          print "SVN-Name-collision: %s : %s %s vs %s" % (author, 'FILE', git_author, old_git_author)
+          svn_to_git["%s@%s" % (author,old_git_author[0])] = old_git_author
+      svn_to_git[author] = (None, None, git_author)
+    else:
+      if old_git_author and old_git_author[2] and git_author != old_git_author[2]:
+        print "SVN-Name-collision: %s (IGNORE) : %s %s vs %s" % (author, 'FILE', git_author, old_git_author)
+
+
 def print_authors():
   for svn_author, (rev, p, git_author) in sorted(svn_to_git.iteritems()):
     print "%s = %s" % (svn_author, git_author)
 
-
 do_git()
 do_svn()
-do_authors()
+gather_authors()
+gather_from_authormap()
 print_authors()

@@ -1,3 +1,55 @@
+Some current outstanding issues:
+
+1. Need to get a process in place to keep the author map data
+   updated. Ideally, the maintainers of the official file would check
+   in changes somewhere? In the meantime, new authors make the script
+   stop until it's fixed.
+
+2. Need to deploy this process to a VM somewhere, and make sure it
+   keeps running.
+
+3. Can/should we get rid of some of the branches (not the release_*
+   branches, but the miscellaneous other ones)? There's a whole ton of
+   them which are entirely useless. Then there's all the "svntag/*"
+   branches which came from svn "tag"s, but which weren't actually
+   tags.
+
+4. Decide if the flat repository layout chosen here (top-level
+   projects each exist as a top-level directory) is the final
+   repository layout. If not, adjust layout to match final decision.
+
+5. Create better build system support for the chosen repository
+   layout. E.g. with this layout, you shouldn't need to manually
+   symlink things into random places under another project in the
+   source tree to make the build tools build everything.  At the same
+   time, it (probably) shouldn't be the case that everything builds
+   all the time. ?Top-level cmake file that has options like
+   -DWITH_CLANG -DWITH_LLD? ?Something else?
+
+...And, finally...are we actually going to do monorepo? Who's going to
+make that decision?
+
+
+Re #3: starting a list of useless branches:
+llvm
+poolalloc
+PowerPC_0
+svntag/comeback
+svntag/intel_release
+svntag/JTC_POOL_WORKS
+svntag/main_lastmerge
+svntag/May2007
+svntag/OldStatistics
+svntag/PA_111
+svntag/PA_112
+svntag/pldi2005
+svntag/PowerPC_0_0
+svntag/rel19_lastmerge
+svntag/start
+
+
+
+===== Previous notes =====
 1. I use trac's sqlite database of svn metadata to ease lookup of events in svn history.
 
 So, you can run queries like:
@@ -38,18 +90,72 @@ llvm_filter.py.
 I also used that module for fixup-tags.py.
 
 More things to be done:
-3. Editing commit messages (do we want to replace r12345 -> git
-   hash?).
-4. Extracting authorship information from commit message "Patch by
-   XXXX!" lines.
-5. Add support for svn:mergeinfo to svn-all-fast-export (?)
-6. ...I'm sure there's more.
+
+1. Editing commit messages (do we want to replace r12345 -> git
+   hash?). Decided this is probably not worthwhile. Mapping from svn
+   rev to githash is easy enough, e.g.:
+       git show :/llvm-svn=3009\\b
+       git rev-parse :/llvm-svn=3009\\b
+
+2. Extracting authorship information from commit message "Patch by
+   XXXX!" lines. (Decided that we're NOT going to do this, since
+   that's not actually reliable enough anyways)
+
+3. Add support for svn:mergeinfo to svn-all-fast-export (?)
+
+4. Fix CVS disasters from before cvs2svn conversion
+   First SVN revision: r37801, Fri Jun 29 16:35:07 2007 +0000
+   RELEASE_21 was first release.
+   Up through: llvm-commits/Week-of-Mon-20070625.txt.gz
+   r3583 was first in mail-archives, Fri Sep 6 02:02:58 2002 +0000
+   Done.
 
 
+Branchpoints:
+LLVM 2.1:
+   Date:   Thu Sep 13 01:26:11 2007 +0000
+   llvm-svn=41908
 
+LLVM 2.0: (release_20~1)
+   Date:   Tue May 8 02:19:56 2007 +0000
+   llvm-svn=36919
 
+LLVM 1.9: (release_19~26)
+   Date:   Tue Nov 7 04:12:03 2006 +0000
+   llvm-svn=31488
 
+LLVM 1.8: (release_18~1)
+   Date:   Thu Jul 27 04:24:14 2006 +0000
+   llvm-svn=29324
 
+LLVM 1.7: (release_17)
+   Date:   Thu Apr 13 19:50:07 2006 +0000
+   llvm-svn=27674
+
+LLVM 1.6: (release_16)
+    Date:   Thu Oct 27 16:30:44 2005 +0000
+    llvm-svn=24041
+
+LLVM 1.5: (release_15)
+    Date:   Fri May 13 17:42:54 2005 +0000
+    llvm-svn=21942
+
+LLVM 1.4: (release_14~3)
+
+git checkout origin/release_20~1
+diff -r -b ../llvm-2.0/ llvm/
+
+git checkout origin/release_19~26
+diff -r -b ../llvm-1.9/ llvm/
+
+git checkout origin/release_18~1
+diff -r -b ../llvm-1.8a/ llvm/
+
+git checkout origin/release_17
+diff -r -b ../llvm-1.7/ llvm/
+
+git checkout origin/release_16
+diff -r -b ../llvm-1.6/ llvm/
 
 ============
 NOTES about historical events discovered trawling through the trac db:
