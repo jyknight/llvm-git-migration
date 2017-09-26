@@ -34,7 +34,7 @@ class Filterer(object):
         before_rev=int(before_rev)
       else:
         before_rev = 2**64
-        authormap[svnauthor].append((before_rev,email))
+      authormap[svnauthor].append((before_rev,email))
 
     for l in authormap.itervalues():
       l.sort()

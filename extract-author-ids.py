@@ -8,7 +8,7 @@ rev_to_git_author = {}
 
 def do_git():
 #  for p in ["clang", "clang-tools-extra", "compiler-rt", "dragonegg", "libcxxabi", "libcxx", "lldb", "lld", "llgo", "llvm", "lnt", "polly", "test-suite"]:
-  for p in ["clang", "clang-tools-extra", "compiler-rt", "dragonegg", "libcxxabi", "libcxx", "lldb", "lld", "llgo", "llvm", "lnt", "polly"]:
+  for p in ["clang", "clang-tools-extra", "compiler-rt", "dragonegg", "libcxxabi", "libcxx", "lldb", "lld", "llgo", "llvm", "lnt", "polly", "openmp"]:
 #  for p in ["clang", "llvm"]:
     git_log = subprocess.check_output(["git", "-C", "/d2/llvm-gits/%s" % p, "log"]).split('\n')
     author = None
