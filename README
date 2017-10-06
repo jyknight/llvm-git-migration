@@ -1,14 +1,20 @@
 Some current outstanding issues:
 
-1. Need to get a process in place to keep the author map data
+1. DONE.
+
+   Need to get a process in place to keep the author map data
    updated. Ideally, the maintainers of the official file would check
    in changes somewhere? In the meantime, new authors make the script
    stop until it's fixed.
 
-2. Need to deploy this process to a VM somewhere, and make sure it
+2. DONE. Deployed on GCE VM.
+
+   Need to deploy this process to a VM somewhere, and make sure it
    keeps running.
 
-3. Can/should we get rid of some of the branches (not the release_*
+3. DEFERRED -- can be done at any point in the future.
+
+   Can/should we get rid of some of the branches (not the release_*
    branches, but the miscellaneous other ones)? There's a whole ton of
    them which are entirely useless. Then there's all the "svntag/*"
    branches which came from svn "tag"s, but which weren't actually
@@ -18,7 +24,10 @@ Some current outstanding issues:
    projects each exist as a top-level directory) is the final
    repository layout. If not, adjust layout to match final decision.
 
-5. Create better build system support for the chosen repository
+5. DONE ages ago, but I failed to notice.
+   (e.g. cmake -DLLVM_ENABLE_PROJECTS=clang)
+
+   Create better build system support for the chosen repository
    layout. E.g. with this layout, you shouldn't need to manually
    symlink things into random places under another project in the
    source tree to make the build tools build everything.  At the same

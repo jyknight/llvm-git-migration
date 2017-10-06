@@ -26,7 +26,6 @@ class Filterer(object):
   def read_authormap(self, authors_filename):
     authormap=collections.defaultdict(list)
     cfg = ConfigParser.RawConfigParser()
-    cfg.optionxform=str # Make it case sensitive
     cfg.read(authors_filename)
     for svnauthor,email in cfg.items('authors'):
       if '@' in svnauthor:
@@ -451,7 +450,7 @@ class Filterer(object):
     return commit
 
   def get_new_author(self, svnrev, oldauthor):
-    for entry in self.authormap[oldauthor]:
+    for entry in self.authormap[oldauthor.lower()]:
       if svnrev < entry[0]:
         return entry[1]
     raise Exception("Can't find author mapping for %s at %d" % (oldauthor, svnrev))

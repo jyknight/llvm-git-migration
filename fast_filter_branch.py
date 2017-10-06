@@ -753,14 +753,15 @@ def do_filter(commit_filter=None, tag_filter=None, global_file_actions=None,
   print 'Filtering...'
   progress = 0
   for rev in revlist:
-    if progress % 100 == 0:
-      print ' [%d/%d]\r' % (progress, len(revlist)),
-      sys.stdout.flush()
     progress += 1
 
     if rev in revmap:
       # If this commit was already processed (with an input revmap), skip
       continue
+
+    if progress % 100 == 0:
+      print ' [%d/%d]\r' % (progress, len(revlist)),
+      sys.stdout.flush()
 
     oldcommit = fm.get_commit(rev)
     commit = oldcommit.copy()

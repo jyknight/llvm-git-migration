@@ -42,7 +42,7 @@ def do_svn():
       print l
       assert match
     rev = int(match.group(1))
-    author = match.group(2)
+    author = match.group(2).lower()
     numlines = int(match.group(3))
 
     svn_authors[rev] = author
@@ -64,7 +64,6 @@ def gather_authors():
 
 def gather_from_authormap():
   cfg = ConfigParser.RawConfigParser()
-  cfg.optionxform=str # Make it case sensitive
   cfg.read("svn-mailer.conf")
   for author,git_author in cfg.items('authors'):
     old_git_author = svn_to_git.get(author)
@@ -85,5 +84,5 @@ def print_authors():
 do_git()
 do_svn()
 gather_authors()
-gather_from_authormap()
+#gather_from_authormap()
 print_authors()
