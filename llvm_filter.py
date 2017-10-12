@@ -450,18 +450,19 @@ class Filterer(object):
     return commit
 
   def get_new_author(self, svnrev, oldauthor):
+    if oldauthor == 'SVN to Git Conversion <nobody@llvm.org>':
+      return oldauthor
+
+    # Extract only the name, ignore the email.
+    oldauthor = oldauthor.split(' <')[0]
     for entry in self.authormap[oldauthor.lower()]:
       if svnrev < entry[0]:
         return entry[1]
     raise Exception("Can't find author mapping for %s at %d" % (oldauthor, svnrev))
 
   def author_fixup(self, fm, commit, svnrev):
-    oldauthor = commit.author
-    if oldauthor == 'SVN to Git Conversion <nobody@llvm.org>':
-      return commit
-    # Extract only the name, ignore the email.
-    oldauthor = oldauthor.split(' <')[0]
-    commit.author = self.get_new_author(svnrev, oldauthor)
+    commit.author = self.get_new_author(svnrev, commit.author)
+    commit.committer = self.get_new_author(svnrev, commit.committer)
     return commit
 
   def find_svnrev(self, msg):
