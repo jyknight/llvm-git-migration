@@ -20,7 +20,7 @@
 # 1) All subprojects (top-level directories) that do exist in the tag
 #    have the same tree hash as the parent.
 # 2) Other subprojects may not be present in the tag's tree, but are
-# in the parent.
+#    in the parent.
 #
 # If they are equivalent, the tag branch is converted to an annotated
 # tag with the commit message and authorship information of that last
@@ -60,7 +60,7 @@ def convert_tagref(fm, tagname, branch_rev_set):
   # While we're at it, we also collect all the left-parent commits
   # which are not on any branch into commits_in_tag, to put in the
   # log-message.
-  tag_parent_hash = None
+  tag_parent_hash_candidates = []
 
   commit = tag_commit
   commits_in_tag = [commit]
@@ -70,8 +70,8 @@ def convert_tagref(fm, tagname, branch_rev_set):
       print "%s: ERR: weird commit parents." % tagname
       return
 
-    if tag_parent_hash is None and commit.parents[-1] in branch_rev_set:
-      tag_parent_hash = commit.parents[-1]
+    if commit.parents[-1] in branch_rev_set:
+      tag_parent_hash_candidates.append(commit.parents[-1])
 
     # Next commit
     if commit.parents[0] in branch_rev_set:
@@ -79,19 +79,22 @@ def convert_tagref(fm, tagname, branch_rev_set):
     commit = fm.get_commit(commit.parents[0])
     commits_in_tag.append(commit)
 
-  if tag_parent_hash is not None:
+  #print tag_parent_hash_candidates
+  for tag_parent_hash in tag_parent_hash_candidates:
     # Check if the trees are equivalent, per definition at the top.
     tag_tree = fm.get_tree(tag_commit.tree)
     parent_tree = fm.get_tree(fm.get_commit(tag_parent_hash).tree)
+    print "Trees:", tag_tree, parent_tree
 
-    for entry in tag_tree:
-      if entry not in parent_tree:
-        print "%s: ERR: tree not equivalent to potential parent %s" % (tagname, tag_parent_hash)
-        return
+    if any(entry not in parent_tree.iteritems() for entry in tag_tree.iteritems()):
+      # Mismatched trees -- next!
+      continue
 
     # OKAY! Let's make the tag!
     bare_tagname = re.sub('refs/heads/svntag/', '', tagname)
-    newtag = fast_filter_branch.Tag(object_hash=tag_parent_hash, name=bare_tagname, tagger=commit.committer, tagger_date=commit.committer_date, msg=commit.msg)
+    newtag = fast_filter_branch.Tag(object_hash=tag_parent_hash, name=bare_tagname,
+                                    tagger=commits_in_tag[0].committer, tagger_date=commits_in_tag[0].committer_date,
+                                    msg=commits_in_tag[0].msg)
 
     if len(commits_in_tag) > 1:
       newtag.msg += '\n--\nSVN tag also included these previous commits:\n'
@@ -107,6 +110,9 @@ def convert_tagref(fm, tagname, branch_rev_set):
     fm.reset_ref(tagname, fast_filter_branch.ALL_ZERO_HASH)
     fm.write_tag(newtag)
     print "%s: OK: Wrote as a real tag, superseding %d commits!" % (tagname, len(commits_in_tag))
+    return
+  print "%s: ERR: tree not equivalent to potential parents %s" % (tagname, list(tag_parent_hash_candidates))
+
 
 def main():
   fm = fast_filter_branch.FilterManager()

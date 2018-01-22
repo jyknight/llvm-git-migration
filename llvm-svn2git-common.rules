@@ -1,0 +1,84 @@
+# These variables should partition the entire space of projects
+# which have ever existed.
+declare MONOREPO_PROJECTS=(?:cfe|monorepo-root|gcc-plugin|clang-tools-extra|compiler-rt|debuginfo-tests|dragonegg|libclc|libcxx|libcxxabi|libunwind|lld|lldb|llgo|llvm|openmp|parallel-libs|polly|stacker)
+declare SEPARATED_PROJECTS=(?:lnt|test-suite|www|www-pubs|zorg|safecode|poolalloc)
+declare ARCHIVE_PROJECTS=(?:llvm-gcc-4-2|clang-tests|clang-tests-external|core|llvm-top|sample|support|hlvm|llvm-gcc-4.0|llvm-gcc-4.2|llbrowse|television|nightly-test-server|java|vmkit)
+declare IGNORED_PROJECTS=(?:giri|klee|elp|lold|tmp|website|trunk|tags|branches|cfe.dead|www-releases)
+
+# Some branches are at a different level. Enumerate those.
+declare NESTED_BRANCHNAMES=(?:Apple/1040|Apple|apple|checker|cremebrulee|google|ggreif|GSoC|wendling)
+declare BRANCH_PATTERNS=(?:branches/(?:${NESTED_BRANCHNAMES}/|)[^/]+)
+declare TAG_PATTERNS=(?:tags/RELEASE_[^/]+/(?:final|Final|rc[0-9]+|dot[0-9]+[^/]*)|tags/google/[^/]+/[^/]+|tags/(?:${NESTED_BRANCHNAMES}/|)[^/]+)
+
+### Ignore initial messed up release_21 branch creation
+match /
+  min revision 41911
+  max revision 41917
+end match
+
+match /
+  min revision 41919
+  max revision 41919
+end match
+
+### Ignore branch/tag fiddling with release 3.5.
+# This goes along with the 'substitute branch' of RELEASE_35 to RELEASE_350.
+# Skips:
+# * Rename of */branches/release_35 to */branches/release_350
+# * Rename of */branches/release_350 BACK to */branches/release_35
+# * Rename of */tags/RELEASE_35 to */tags/RELEASE_350
+match /
+  min revision 215001
+  max revision 215030
+end match
+
+### Ignore tag fiddling for release 2.8.
+# Skips deletion of */tags/RELEASE_28 (containing release candidates)
+# This goes along with the substitute of RELEASE_28 to RELEASE_28/final.
+match /
+  min revision 115865
+  max revision 115865
+end match
+match /
+  min revision 115867
+  max revision 115867
+end match
+match /
+  min revision 115869
+  max revision 115869
+end match
+match /
+  min revision 115871
+  max revision 115871
+end match
+
+
+### Ignore aborted release 3.1 branch creation
+match /
+  min revision 154899
+  max revision 154903
+end match
+match /
+  min revision 154909
+  max revision 154909
+end match
+match /
+  min revision 155050
+  max revision 155050
+end match
+match /
+  min revision 155052
+  max revision 155052
+end match
+match /
+  min revision 155054
+  max revision 155054
+end match
+match /
+  min revision 155056
+  max revision 155056
+end match
+match /
+  min revision 155058
+  max revision 155058
+end match

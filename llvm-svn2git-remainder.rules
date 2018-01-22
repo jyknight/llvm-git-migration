@@ -1,0 +1,84 @@
+include llvm-svn2git-common.rules
+
+# Create the repositories (unfortunately duplicative of the data in -common.
+create repository archive
+end repository
+
+create repository lnt
+end repository
+
+create repository test-suite
+end repository
+
+create repository www
+end repository
+
+create repository www-pubs
+end repository
+
+create repository zorg
+end repository
+
+create repository safecode
+end repository
+
+create repository poolalloc
+end repository
+
+### Handle archive repo
+
+match /
+  # Ignore move from /llvm-gcc-4-2/ to /llvm-gcc-4.2/
+  min revision 39966
+  max revision 39966
+end match
+
+match /llvm-gcc-4-2/trunk/
+  # Rename llvm-gcc-4-2 to llvm-gcc-4.2
+  repository archive
+  branch refs/pristine/master
+  prefix llvm-gcc-4.2/
+end match
+
+match /(${ARCHIVE_PROJECTS})/trunk/
+  repository archive
+  branch refs/pristine/master
+  prefix \1/
+end match
+
+match /(${ARCHIVE_PROJECTS})/(${BRANCH_PATTERNS}|${TAG_PATTERNS})/
+  repository archive
+  prefix \1/
+  branch refs/pristine/\2
+  substitute branch s!^refs/pristine/tags/RELEASE_35$!refs/pristine/tags/RELEASE_350!
+  substitute branch s!^refs/pristine/tags/RELEASE_28$!refs/pristine/tags/RELEASE_28/final!
+  substitute branch s!^refs/pristine/branches/apple$!refs/pristine/branches/apple-base!
+  substitute branch s!^refs/pristine/tags/!refs/pristine/svntag/!
+  substitute branch s!^refs/pristine/branches/!refs/pristine/!
+end match
+
+### Handle separate-repo projects.
+match /(${SEPARATED_PROJECTS})/trunk/
+  repository \1
+  branch refs/pristine/master
+end match
+
+match /(${SEPARATED_PROJECTS})/(${BRANCH_PATTERNS}|${TAG_PATTERNS})/
+  repository \1
+  branch refs/pristine/\2
+  substitute branch s!^refs/pristine/tags/RELEASE_35$!refs/pristine/tags/RELEASE_350!
+  substitute branch s!^refs/pristine/tags/RELEASE_28$!refs/pristine/tags/RELEASE_28/final!
+  substitute branch s!^refs/pristine/branches/apple$!refs/pristine/branches/apple-base!
+  substitute branch s!^refs/pristine/tags/!refs/pristine/svntag/!
+  substitute branch s!^refs/pristine/branches/!refs/pristine/!
+end match
+
+
+### Explicitly ignore the ignorables.
+match /(${MONOREPO_PROJECTS}|${IGNORED_PROJECTS})/
+end match
+
+match /README.(html|txt)
+end match
+
+# Note: any unhandled paths that reach the end are an error.

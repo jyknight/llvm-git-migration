@@ -213,9 +213,12 @@ class TreeEntry(object):
       return self.remove_entry(fm, pathsegs[0])
 
     r = self.get_subentries(fm)
-    if pathsegs[0] not in r:
+    oldsub = r.get(pathsegs[0])
+    if oldsub is None:
       return self
-    newsub = r[pathsegs[0]].remove_path(fm, pathsegs[1:])
+    newsub = oldsub.remove_path(fm, pathsegs[1:])
+    if newsub is oldsub:
+      return self
     return self.add_entry(fm, pathsegs[0], newsub)
 
   def add_path(self, fm, pathsegs, newentry):
