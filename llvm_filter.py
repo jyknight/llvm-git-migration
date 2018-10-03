@@ -53,12 +53,6 @@ class CvsFixup(object):
     return self.treeref.githash
 
 class Filterer(object):
-  file_changes = [
-      # At one point a zip file of all of llvm was checked into
-      # lldb. This is quite large, so we want to delete it.
-      ('/lldb/llvm.zip', lambda fm, path, githash: None),
-  ]
-
   additional_commit_merges = [
       # Release 3.2 -- all these should merge into 167704.
       167705, 167706, 167707, 167708, 167709, 167710, 167711, 167712, 167713,
@@ -142,7 +136,12 @@ class Filterer(object):
     # encoded by trunk version number.
     cvs_branchpoints = {}
     def get_branchdata(branch):
-      p = subprocess.check_output(['git', 'merge-base', 'refs/heads/master', branch]).strip()
+      p = subprocess.Popen(['git', 'merge-base', 'refs/heads/master', branch], stdout=subprocess.PIPE)
+      output, unused_err = p.communicate()
+      retcode = p.poll()
+      if retcode:
+        return
+      base_rev = output.strip()
       for rev in subprocess.Popen(['git', 'rev-list', branch, '^refs/heads/master'], stdout=subprocess.PIPE).stdout:
         cvs_branchpoints[rev.strip()] = (branch, base_rev)
 
@@ -187,7 +186,8 @@ class Filterer(object):
       trunkrev = svnrev
 
     c = CvsFixup(fm, commit.tree)
-    self.fixup_cvs_file_moves_monorepo(trunkrev, c)
+    if self.repo_name == "monorepo":
+      self.fixup_cvs_file_moves_monorepo(trunkrev, c)
     commit.tree = c.finalize()
     return commit
 
@@ -552,7 +552,24 @@ class Filterer(object):
     return commit
 
   def run(self):
-    fast_filter_branch.do_filter(global_file_actions=self.file_changes,
+    if self.repo_name == "monorepo":
+      file_changes = [
+          # At one point a zip file of all of llvm was checked into
+          # lldb. This is quite large, so we want to delete it.
+          ('/lldb/llvm.zip', lambda fm, path, githash: None),
+      ]
+    elif self.repo_name == "www":
+      # TODO: remove after next repo rebuild.
+      file_changes = [
+          ('/devmtg/2013-04/krzikalla-lores.mov', lambda *args: None),
+          ('/devmtg/2013-04/pellegrini-lores.mov', lambda *args: None),
+          ('/devmtg/2013-04/jasper-lores.mov', lambda *args: None),
+          ('/devmtg/2013-04/stepanov-lores.mov', lambda *args: None),
+      ]
+    else:
+      file_changes = []
+
+    fast_filter_branch.do_filter(global_file_actions=file_changes,
                                  msg_filter=self.msg_filter,
                                  commit_filter=self.commit_filter,
                                  backup_prefix=None,

@@ -58,6 +58,19 @@ match /(${ARCHIVE_PROJECTS})/(${BRANCH_PATTERNS}|${TAG_PATTERNS})/
 end match
 
 ### Handle separate-repo projects.
+
+# Ignore a few movies that were added to www/
+match /www/trunk/devmtg/2013-04/bougacha-lores.mov
+end match
+match /www/trunk/devmtg/2013-04/jasper-lores.mov
+end match
+match /www/trunk/devmtg/2013-04/krzikalla-lores.mov
+end match
+match /www/trunk/devmtg/2013-04/pellegrini-lores.mov
+end match
+match /www/trunk/devmtg/2013-04/stepanov-lores.mov
+end match
+
 match /(${SEPARATED_PROJECTS})/trunk/
   repository \1
   branch refs/pristine/master

@@ -18,8 +18,8 @@ delete_proj() {
 git -C $repo fast-import --import-marks=marks-$repo --export-marks=marks-$repo --quiet <<EOF
 commit refs/pristine/master
 mark $last_mark
-author SVN to Git Conversion <nobody@llvm.org> $1 +0000
-committer SVN to Git Conversion <nobody@llvm.org> $1 +0000
+author SVN to Git Conversion <nobody@llvm.org> $time +0000
+committer SVN to Git Conversion <nobody@llvm.org> $time +0000
 data ${#msg}
 $msg
 from refs/pristine/master^0
@@ -49,7 +49,7 @@ repack_initial_repo() {
 
   cd "$repo-repack"
   git for-each-ref --format="delete %(refname)" refs/pristine/ refs/pre-fixup-tags | git update-ref --stdin
-  git repack -adf --window=9999 --window-memory=1g
+  git repack -adf --window=2500 --window-memory=1g
   git prune
   for x in objects/pack/pack-*.pack; do
     touch "${x%.pack}.keep"
@@ -76,7 +76,7 @@ initial_svn2git() {
 
     # Run svn2git to make a repository
     "${SVNEXPORT[@]}" "$RULESFILE" --max-rev 40406
-    delete_proj 1185141186 stacker
+    delete_proj monorepo 1185141186 stacker
     "${SVNEXPORT[@]}" "$RULESFILE"
   else
     "${SVNEXPORT[@]}" "$RULESFILE"
@@ -110,17 +110,20 @@ initial_import() {
     # script to use later on.
     if [[ $repo = monorepo ]]; then
       for x in $mydir/fixed-files/*; do
-        git hash-object -w $x
+        git -C $repo hash-object -w $x
       done
     fi
 
     # Run postprocessing steps...
     repo_filter_steps $repo
-    # Now, repack the *final* bits of the repository tightly, and mark
-    # the resulting packfile as "keep", so future repacks won't touch
-    # it.
-    repack_initial_repo $repo
   done
+  # Now, repack the *final* bits of the repository tightly, and mark
+  # the resulting packfile as "keep", so future repacks won't touch
+  # it.
+  for repo in $IMPORTED_REPOS; do
+    repack_initial_repo $repo &
+  done
+  wait
 }
 
 incremental_update() {
@@ -131,7 +134,7 @@ incremental_update() {
     # And rerun filtering
     repo_filter_steps $repo
     # And, run a gc to auto-repack as required.
-    git gc --auto
+    git -C $repo gc --auto
   done
 }
 

@@ -52,8 +52,7 @@ match /cfe/(${BRANCH_PATTERNS}|${TAG_PATTERNS})/
   branch refs/pristine/\1
   prefix clang/
   # A '~' in one branch name (Apple/clang-6~1) makes git unhappy.
-  substitute branch s!^refs/pristine/tags/Apple/clang-6~1!tags/Apple/clang-6.1!
-  
+  substitute branch s!^refs/pristine/tags/Apple/clang-6~1!refs/pristine/tags/Apple/clang-6.1!
   substitute branch s!^refs/pristine/tags/RELEASE_35$!refs/pristine/tags/RELEASE_350!
   substitute branch s!^refs/pristine/tags/RELEASE_28$!refs/pristine/tags/RELEASE_28/final!
   substitute branch s!^refs/pristine/branches/apple$!refs/pristine/branches/apple-base!
@@ -138,6 +137,17 @@ end match
 
 # Ignore added and then immediately removed build artifacts:
 match /lldb/trunk/build/
+end match
+
+# Ignore creation and deletion of /lldb/tmp/
+match /
+  min revision 324484
+  max revision 324484
+end match
+
+match /
+  min revision 343598
+  max revision 343598
 end match
 
 # Note: filtering of llvm.zip is done as a post-processing step,
