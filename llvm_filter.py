@@ -558,14 +558,6 @@ class Filterer(object):
           # lldb. This is quite large, so we want to delete it.
           ('/lldb/llvm.zip', lambda fm, path, githash: None),
       ]
-    elif self.repo_name == "www":
-      # TODO: remove after next repo rebuild.
-      file_changes = [
-          ('/devmtg/2013-04/krzikalla-lores.mov', lambda *args: None),
-          ('/devmtg/2013-04/pellegrini-lores.mov', lambda *args: None),
-          ('/devmtg/2013-04/jasper-lores.mov', lambda *args: None),
-          ('/devmtg/2013-04/stepanov-lores.mov', lambda *args: None),
-      ]
     else:
       file_changes = []
 

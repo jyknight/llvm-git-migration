@@ -84,7 +84,7 @@ def convert_tagref(fm, tagname, branch_rev_set):
     # Check if the trees are equivalent, per definition at the top.
     tag_tree = fm.get_tree(tag_commit.tree)
     parent_tree = fm.get_tree(fm.get_commit(tag_parent_hash).tree)
-    print "Trees:", tag_tree, parent_tree
+    #print "Trees:", tag_tree, parent_tree
 
     if any(entry not in parent_tree.iteritems() for entry in tag_tree.iteritems()):
       # Mismatched trees -- next!

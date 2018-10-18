@@ -60,52 +60,6 @@ match /cfe/(${BRANCH_PATTERNS}|${TAG_PATTERNS})/
   substitute branch s!^refs/pristine/branches/!refs/pristine/!
 end match
 
-### Handle gcc-plugin -> dragonegg special cases:
-
-match /gcc-plugin/
-  # In this (single) revision, the files weren't in a trunk subdir yet.
-  max revision 74837
-  repository monorepo
-  branch refs/pristine/master
-  prefix dragonegg/
-end match
-
-match /
-  # Ignore move from /gcc-plugin/ to /gcc-plugin/trunk/
-  min revision 74897
-  max revision 74897
-end match
-
-match /gcc-plugin/trunk/
-  # Special case: use "dragonegg" dir for /gcc-plugin.
-  max revision 83829
-  repository monorepo
-  branch refs/pristine/master
-  prefix dragonegg/
-end match
-
-match /
-  # Ignore move from gcc-plugin/ to dragonegg/, and re-addition of
-  # gcc-plugin with README.
-  min revision 83830
-  max revision 83831
-end match
-
-match /dragonegg/branches/trunk/
-  # r142090 branched dragonegg to "trunk"; they meant "release_30".
-  min revision 142090
-  max revision 142090
-  repository monorepo
-  branch refs/pristine/release_30
-  prefix dragonegg/
-end match
-
-match /
-  # ...and then r142091 renamed it.
-  min revision 142091
-  max revision 142091
-end match
-
 ### Handle compiler-rt's initial revision, which was out of trunk/
 match /compiler-rt/
   min revision 73172

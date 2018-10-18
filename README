@@ -129,7 +129,7 @@ LLVM 2.0: (release_20~1)
    Date:   Tue May 8 02:19:56 2007 +0000
    llvm-svn=36919
 
-LLVM 1.9: (release_19~26)
+LLVM 1.9: (release_19~9)
    Date:   Tue Nov 7 04:12:03 2006 +0000
    llvm-svn=31488
 
@@ -149,12 +149,12 @@ LLVM 1.5: (release_15)
     Date:   Fri May 13 17:42:54 2005 +0000
     llvm-svn=21942
 
-LLVM 1.4: (release_14~3)
+LLVM 1.4: (release_14)
 
 git checkout origin/release_20~1
 diff -r -b ../llvm-2.0/ llvm/
 
-git checkout origin/release_19~26
+git checkout origin/release_19~9
 diff -r -b ../llvm-1.9/ llvm/
 
 git checkout origin/release_18~1
