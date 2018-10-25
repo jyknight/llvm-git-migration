@@ -6,9 +6,17 @@ declare ARCHIVE_PROJECTS=(?:llvm-gcc-4-2|clang-tests|clang-tests-external|core|l
 declare IGNORED_PROJECTS=(?:giri|klee|elp|lold|tmp|website|trunk|tags|branches|cfe.dead|www-releases)
 
 # Some branches are at a different level. Enumerate those.
-declare NESTED_BRANCHNAMES=(?:Apple/1040|Apple|apple|checker|cremebrulee|google|ggreif|GSoC|wendling)
-declare BRANCH_PATTERNS=(?:branches/(?:${NESTED_BRANCHNAMES}/|)[^/]+)
-declare TAG_PATTERNS=(?:tags/RELEASE_[^/]+/(?:final|Final|rc[0-9]+|dot[0-9]+[^/]*)|tags/google/[^/]+/[^/]+|tags/(?:${NESTED_BRANCHNAMES}/|)[^/]+)
+declare NESTED_BRANCHNAMES=(?:Apple/1040|Apple|checker|cremebrulee|google|ggreif|GSoC|wendling)
+declare BRANCH_DIRS=(?:branches/${NESTED_BRANCHNAMES}/|branches/)
+declare TAG_DIRS=(?:tags/RELEASE_(?!(?:1|1[0-9]|2[0-8])/)[^/]+/|tags/google/[^/]+/|tags/${NESTED_BRANCHNAMES}/|tags/)
+
+declare BRANCH_PATTERNS=(?:${BRANCH_DIRS}[^/]+)
+declare TAG_PATTERNS=(?:${TAG_DIRS}[^/]+|tags/RELEASE_28/rc[0-3])
+
+# Ignore commits creating the toplevel directory of a nested branch/tag, to avoid ref-name
+# conflicts (e.g. refs/tags/RELEASE_700 vs refs/tags/RELEASE_700/final).
+match /[^/]*/(?:${BRANCH_DIRS}|${TAG_DIRS})$$
+end match
 
 ### Ignore initial messed up release_21 branch creation
 match /
@@ -35,6 +43,10 @@ end match
 ### Ignore tag fiddling for release 2.8.
 # Skips deletion of */tags/RELEASE_28 (containing release candidates)
 # This goes along with the substitute of RELEASE_28 to RELEASE_28/final.
+match /
+  min revision 113062
+  max revision 113065
+end match
 match /
   min revision 115865
   max revision 115865

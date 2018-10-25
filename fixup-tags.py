@@ -43,7 +43,7 @@ def format_raw_time(raw_time):
 
 def convert_tagref(fm, tagname, branch_rev_set):
   tag_commit = fm.get_commit(tagname)
-  if tag_commit.tree == fast_filter_branch.GIT_EMPTY_TREE_HASH:
+  if tag_commit.treehash == fast_filter_branch.GIT_EMPTY_TREE_HASH:
     # If we have an empty tree, just remove the tag.
     print "%s: OK: empty tree, removing" % tagname
     fm.reset_ref('refs/pre-fixup-tags/' + tagname, tagname)
@@ -82,8 +82,8 @@ def convert_tagref(fm, tagname, branch_rev_set):
   #print tag_parent_hash_candidates
   for tag_parent_hash in tag_parent_hash_candidates:
     # Check if the trees are equivalent, per definition at the top.
-    tag_tree = fm.get_tree(tag_commit.tree)
-    parent_tree = fm.get_tree(fm.get_commit(tag_parent_hash).tree)
+    tag_tree = fm.get_tree(tag_commit.treehash)
+    parent_tree = fm.get_tree(fm.get_commit(tag_parent_hash).treehash)
     #print "Trees:", tag_tree, parent_tree
 
     if any(entry not in parent_tree.iteritems() for entry in tag_tree.iteritems()):
@@ -116,7 +116,7 @@ def convert_tagref(fm, tagname, branch_rev_set):
 
 def main():
   fm = fast_filter_branch.FilterManager()
-  refs = fast_filter_branch.list_refs()
+  refs = fast_filter_branch.list_branches_tags()
 
   branches = [ref for ref in refs if not ref.startswith('refs/heads/svntag')]
   tags = [ref for ref in refs if ref.startswith('refs/heads/svntag')]

@@ -185,10 +185,10 @@ class Filterer(object):
     else:
       trunkrev = svnrev
 
-    c = CvsFixup(fm, commit.tree)
+    c = CvsFixup(fm, commit.treehash)
     if self.repo_name == "monorepo":
       self.fixup_cvs_file_moves_monorepo(trunkrev, c)
-    commit.tree = c.finalize()
+    commit.treehash = c.finalize()
     return commit
 
   def fixup_cvs_file_moves_monorepo(self, trunkrev, c):
@@ -220,13 +220,17 @@ class Filterer(object):
       # DenseMap.h renamed to IndexedMap.h; ,v copied
       c.rm('llvm/include/llvm/ADT/IndexedMap.h')
 
+    if trunkrev < 33050:
+      # Renamed from Writer.h; ,v copied (and all branch tags removed!)
+      c.rm('llvm/lib/Target/CBackend/CBackend.cpp')
+
     if trunkrev < 33296:
       # At around r33296, the ,v files in test/Regression/ were moved up one level.
       # Except .cvsignore, which was deleted. (same content as in Analysis tho)
       c.cp('llvm/test/Analysis/.cvsignore', 'llvm/test/Regression/.cvsignore')
       for x in ('Analysis', 'Archive', 'Assembler', 'BugPoint', 'Bytecode',
-                'CFrontend', 'C++Frontend', 'CodeGen', 'Debugger',
-                'ExecutionEngine', 'LLC', 'Linker', 'Other', 'TableGen',
+                'CFrontend', 'CBackend', 'C++Frontend', 'CodeGen', 'Debugger',
+                'ExecutionEngine', 'Jello', 'LLC', 'Linker', 'Other', 'TableGen',
                 'Transforms', 'Verifier'):
         c.mv('llvm/test/'+x, 'llvm/test/Regression/'+x)
 
@@ -286,7 +290,6 @@ class Filterer(object):
 
     if trunkrev < 23745:
       c.mv('llvm/lib/Target/PowerPC/PPCInstrInfo.h', 'llvm/lib/Target/PowerPC/PPC32InstrInfo.h')
-      c.mv('llvm/lib/Target/PowerPC/PPCJITInfo.h', 'llvm/lib/Target/PowerPC/PowerPCJITInfo.h')
       c.mv('llvm/lib/Target/PowerPC/PPCRegisterInfo.h', 'llvm/lib/Target/PowerPC/PPC32RegisterInfo.h')
       c.mv('llvm/lib/Target/PowerPC/PPCRelocations.h', 'llvm/lib/Target/PowerPC/PPC32Relocations.h')
       c.mv('llvm/lib/Target/PowerPC/PPCTargetMachine.h', 'llvm/lib/Target/PowerPC/PPC32TargetMachine.h')
@@ -297,11 +300,31 @@ class Filterer(object):
       c.mv('llvm/lib/Target/PowerPC/PPCRegisterInfo.cpp', 'llvm/lib/Target/PowerPC/PPC32RegisterInfo.cpp')
 
     if trunkrev < 23743:
-      c.mv('llvm/lib/Target/PowerPC/PPC.h', 'llvm/lib/Target/PowerPC/PowerPC.h')
       c.mv('llvm/lib/Target/PowerPC/PPCFrameInfo.h', 'llvm/lib/Target/PowerPC/PowerPCFrameInfo.h')
-      c.mv('llvm/lib/Target/PowerPC/PPCAsmPrinter.cpp', 'llvm/lib/Target/PowerPC/PowerPCAsmPrinter.cpp')
       c.mv('llvm/lib/Target/PowerPC/PPCBranchSelector.cpp', 'llvm/lib/Target/PowerPC/PowerPCBranchSelector.cpp')
-      c.mv('llvm/lib/Target/PowerPC/PPCTargetMachine.cpp', 'llvm/lib/Target/PowerPC/PowerPCTargetMachine.cpp')
+
+      if trunkrev > 15636: # PowerPCAsmPrinter.cpp previously existed before here...
+        c.mv('llvm/lib/Target/PowerPC/PPCAsmPrinter.cpp', 'llvm/lib/Target/PowerPC/PowerPCAsmPrinter.cpp')
+      else:
+        c.rm('llvm/lib/Target/PowerPC/PPCAsmPrinter.cpp')
+
+      if trunkrev > 14877:
+        # PowerPCTargetMachine previously existed before here...
+        c.mv('llvm/lib/Target/PowerPC/PPC.h', 'llvm/lib/Target/PowerPC/PowerPC.h')
+        c.mv('llvm/lib/Target/PowerPC/PPCJITInfo.h', 'llvm/lib/Target/PowerPC/PowerPCJITInfo.h')
+        c.mv('llvm/lib/Target/PowerPC/PPCTargetMachine.cpp', 'llvm/lib/Target/PowerPC/PowerPCTargetMachine.cpp')
+      else:
+        # ... and there's quite the mixed up history here, where some
+        # externally-developed PowerPC*,v files were imported, into the
+        # repository that already had Attic/PowerPC*,v files in it. And then
+        # renamed to PPC*,v later on. Can't really have a correct history of all
+        # this, so, I'll just keep the files around.
+        #
+        # c.rm('llvm/lib/Target/PowerPC/PPC.h')
+        # c.rm('llvm/lib/Target/PowerPC/PPCJITInfo.h')
+        # c.rm('llvm/lib/Target/PowerPC/PPCTargetMachine.cpp')
+        pass
+
 
     if trunkrev < 23742:
       c.mv('llvm/lib/Target/PowerPC/PPCInstrBuilder.h', 'llvm/lib/Target/PowerPC/PowerPCInstrBuilder.h')
@@ -329,6 +352,10 @@ class Filterer(object):
     if trunkrev < 21498:
       c.rm('llvm/tools/llvm-extract/llvm-extract.cpp')
 
+    if trunkrev < 20570:
+      c.rm('llvm/include/llvm/Analysis/DataStructure/EquivClassGraphs.h')
+      c.rm('llvm/lib/Analysis/DataStructure/EquivClassGraphs.cpp')
+
     if trunkrev < 19426:
       # Renamed .cpp files to .inc
       c.rm('llvm/lib/System/Unix/MappedFile.inc')
@@ -347,8 +374,23 @@ class Filterer(object):
       c.rm('llvm/lib/System/Win32/Signals.inc')
       c.rm('llvm/lib/System/Win32/TimeValue.inc')
 
+    if trunkrev < 18315:
+      c.rm('llvm/docs/doxygen.cfg.in')
+
+    if trunkrev < 18132:
+      c.mv('llvm/lib/ExecutionEngine/JIT/JITEmitter.cpp', 'llvm/lib/ExecutionEngine/JIT/Emitter.cpp')
+
     if trunkrev < 17743:
       c.rm('llvm/include/llvm/Linker.h')
+
+    if trunkrev < 17742:
+      c.rm('llvm/lib/Bytecode/Archive/ArchiveReader.cpp')
+
+    if trunkrev < 17694:
+      c.rm('llvm/lib/Linker/LinkModules.cpp')
+
+    if trunkrev < 17693:
+      c.rm('llvm/lib/Linker/LinkArchives.cpp')
 
     if trunkrev < 17538:
       for x in ['2002-04-14-UnexpectedUnsignedType.ll',
@@ -379,57 +421,57 @@ class Filterer(object):
     if trunkrev < 17380:
       c.rm('llvm/docs/UsingLibraries.html')
 
+    if trunkrev < 16902:
+      # Moved from llvm/lib/CodeGen/ModuloScheduling
+      c.rm('llvm/lib/Target/SparcV9/ModuloScheduling')
+
     if trunkrev < 16849:
       # Moved from lib/CodeGen/InstrSched
       c.rm('llvm/lib/Target/SparcV9/InstrSched')
 
+    if trunkrev < 16802:
+      c.mv('llvm/lib/Transforms/IPO/GlobalOpt.cpp', 'llvm/lib/Transforms/IPO/GlobalConstifier.cpp')
+
+    if trunkrev < 16267:
+      c.rm('llvm/lib/Target/SparcV8/SparcV8ISelSimple.cpp')
+
+    if trunkrev < 16173 and trunkrev > 15636:
+      # PPC32AsmPrinter renamed to PowerPCAsmPrinter; copied ,v files; but
+      # PowerPCAsmPrinter.cpp exists again, before r15636.
+      c.rm('llvm/lib/Target/PowerPC/PowerPCAsmPrinter.cpp')
+
     if trunkrev < 16137:
       # Moved from include/Support and include/Config to these
       # locations; ,v copied.
+      #
+      # Also -- some of these were moved *FROM* include/llvm/Support to
+      # include/Support in r1400.
       c.rm('llvm/include/llvm/ADT')
       c.rm('llvm/include/llvm/Config')
-      c.rm('llvm/include/llvm/Support/MallocAllocator.h')
-      c.rm('llvm/include/llvm/Support/MathExtras.h')
-      c.rm('llvm/include/llvm/Support/ThreadSupport.h.in')
-      c.rm('llvm/include/llvm/Support/Tree.h')
-      c.rm('llvm/include/llvm/Support/ilist')
-      c.rm('llvm/include/llvm/Support/EquivalenceClasses.h')
-      c.rm('llvm/include/llvm/Support/GraphWriter.h')
-      c.rm('llvm/include/llvm/Support/SetVector.h')
-      c.rm('llvm/include/llvm/Support/ThreadSupport-NoSupport.h')
-      c.rm('llvm/include/llvm/Support/hash_map.in')
+      c.rm('llvm/include/llvm/Support/Annotation.h')
+      c.rm('llvm/include/llvm/Support/Casting.h')
+      if trunkrev > 1400:
+        c.rm('llvm/include/llvm/Support/CommandLine.h')
+      c.rm('llvm/include/llvm/Support/DOTGraphTraits.h')
+      c.rm('llvm/include/llvm/Support/DataTypes.h.in')
+      c.rm('llvm/include/llvm/Support/Debug.h')
+      c.rm('llvm/include/llvm/Support/DynamicLinker.h')
+      c.rm('llvm/include/llvm/Support/ELF.h')
       c.rm('llvm/include/llvm/Support/FileUtilities.h')
+      c.rm('llvm/include/llvm/Support/GraphWriter.h')
+      c.rm('llvm/include/llvm/Support/LeakDetector.h')
+      c.rm('llvm/include/llvm/Support/MallocAllocator.h')
+      if trunkrev > 1400:
+        c.rm('llvm/include/llvm/Support/MathExtras.h')
+      c.rm('llvm/include/llvm/Support/PluginLoader.h')
       c.rm('llvm/include/llvm/Support/SlowOperationInformer.h')
       c.rm('llvm/include/llvm/Support/SystemUtils.h')
-      c.rm('llvm/include/llvm/Support/DynamicLinker.h')
-      c.rm('llvm/include/llvm/Support/LeakDetector.h')
-      c.rm('llvm/include/llvm/Support/CommandLine.h')
-      c.rm('llvm/include/llvm/Support/TypeInfo.h')
-      c.rm('llvm/include/llvm/Support/Annotation.h')
-      c.rm('llvm/include/llvm/Support/Timer.h')
-      c.rm('llvm/include/llvm/Support/StringExtras.h')
-      c.rm('llvm/include/llvm/Support/BitSetVector.h')
-      c.rm('llvm/include/llvm/Support/PostOrderIterator.h')
-      c.rm('llvm/include/llvm/Support/DOTGraphTraits.h')
-      c.rm('llvm/include/llvm/Support/Casting.h')
-      c.rm('llvm/include/llvm/Support/VectorExtras.h')
+      c.rm('llvm/include/llvm/Support/ThreadSupport-NoSupport.h')
       c.rm('llvm/include/llvm/Support/ThreadSupport-PThreads.h')
-      c.rm('llvm/include/llvm/Support/Statistic.h')
-      c.rm('llvm/include/llvm/Support/ELF.h')
-      c.rm('llvm/include/llvm/Support/Debug.h')
-      c.rm('llvm/include/llvm/Support/STLExtras.h')
-      c.rm('llvm/include/llvm/Support/iterator.in')
-      c.rm('llvm/include/llvm/Support/GraphTraits.h')
-      c.rm('llvm/include/llvm/Support/DenseMap.h')
-      c.rm('llvm/include/llvm/Support/.cvsignore')
-      c.rm('llvm/include/llvm/Support/HashExtras.h')
-      c.rm('llvm/include/llvm/Support/PluginLoader.h')
-      c.rm('llvm/include/llvm/Support/DepthFirstIterator.h')
-      c.rm('llvm/include/llvm/Support/SCCIterator.h')
-      c.rm('llvm/include/llvm/Support/DataTypes.h.in')
+      c.rm('llvm/include/llvm/Support/ThreadSupport.h.in')
+      c.rm('llvm/include/llvm/Support/Timer.h')
+      c.rm('llvm/include/llvm/Support/TypeInfo.h')
       c.rm('llvm/include/llvm/Support/type_traits.h')
-      c.rm('llvm/include/llvm/Support/SetOperations.h')
-      c.rm('llvm/include/llvm/Support/hash_set.in')
 
     if trunkrev < 16003:
       # Moved from llvm/examples/ModuleMaker/tools/ModuleMaker/ModuleMaker.cpp')
@@ -449,11 +491,176 @@ class Filterer(object):
       c.rm('llvm/projects/SmallExamples/ModuleMaker')
       c.rm('llvm/projects/SmallExamples/HowToUseJIT')
 
+    if trunkrev < 15830:
+      c.rm('llvm/lib/Target/SparcV9/MachineFunctionInfo.h')
+      c.rm('llvm/lib/Target/SparcV9/MachineCodeForInstruction.h')
+
+    if trunkrev < 15825:
+      # Moved from Support into VMCore
+      c.rm('llvm/lib/VMCore/ConstantRange.cpp')
+      c.rm('llvm/lib/VMCore/LeakDetector.cpp')
+      c.rm('llvm/lib/VMCore/Mangler.cpp')
+
+    if trunkrev < 15634:
+      # PowerPCAsmPrinter.cpp,v copied to PPC32AsmPrinter.cpp,v (and also later PPCAsmPrinter.cpp,v)
+      c.rm('llvm/projects/lib/Target/PowerPC/PPC32AsmPrinter.cpp')
+
+    if trunkrev < 15382:
+      c.rm('llvm/utils/TableGen/CodeGenTarget.cpp')
+      c.rm('llvm/utils/TableGen/CodeGenTarget.h')
+
+    if trunkrev < 15238:
+      c.rm('llvm/lib/Target/X86/X86AsmPrinter.cpp')
+      c.rm('llvm/lib/Target/X86/X86FloatingPoint.cpp')
+      c.rm('llvm/lib/Target/X86/X86ISelPattern.cpp')
+      c.rm('llvm/lib/Target/X86/X86ISelSimple.cpp')
+      c.rm('llvm/lib/Target/X86/X86PeepholeOpt.cpp')
+
+    if trunkrev < 15316:
+      c.rm('llvm/test/Regression/Analysis/BasicAA')
+
+    if trunkrev < 15135:
+      c.mv("llvm/lib/CodeGen/LiveIntervalAnalysis.cpp", "llvm/lib/CodeGen/LiveIntervals.cpp")
+      c.mv("llvm/lib/CodeGen/LiveIntervalAnalysis.h", "llvm/lib/CodeGen/LiveIntervals.h")
+
+    if trunkrev < 14662:
+      c.rm('llvm/include/llvm/Analysis/DataStructure/DataStructure.h')
+      c.rm('llvm/include/llvm/Analysis/DataStructure/DSGraph.h')
+      c.rm('llvm/include/llvm/Analysis/DataStructure/DSGraphTraits.h')
+      c.rm('llvm/include/llvm/Analysis/DataStructure/DSNode.h')
+      c.rm('llvm/include/llvm/Analysis/DataStructure/DSSupport.h')
+
+    if trunkrev < 14605:
+      c.rm('llvm/lib/Bytecode/Writer/SlotCalculator.h')
+
+    if trunkrev < 14350:
+      c.rm('llvm/include/llvm/Support/Linker.h')
+
+    if trunkrev < 14348:
+      c.rm('llvm/lib/VMCore/Linker.cpp')
+
+    if trunkrev < 14330:
+      c.rm('llvm/lib/Analysis/IPA/PrintSCC.cpp')
+
+    if trunkrev < 13900:
+      c.rm('llvm/lib/Bytecode/Writer/SlotCalculator.cpp')
+
+    if trunkrev < 14327:
+      c.rm('llvm/lib/Analysis/DataStructure/PgmDependenceGraph.cpp')
+
+    if trunkrev < 14326:
+      c.rm('llvm/lib/Analysis/DataStructure/IPModRef.cpp')
+      c.rm('llvm/lib/Analysis/DataStructure/MemoryDepAnalysis.cpp')
+
+    if trunkrev < 14325:
+      c.rm('llvm/lib/Analysis/DataStructure/Parallelize.cpp')
+
+    if trunkrev < 14266 and trunkrev >= 10623:
+      c.rm('llvm/lib/CodeGen/IntrinsicLowering.cpp')
+
+    if trunkrev < 14264 and trunkrev >= 10622:
+      c.rm('llvm/include/llvm/CodeGen/IntrinsicLowering.h')
+
+    if trunkrev < 13810:
+      c.rm('llvm/include/llvm/System/Signals.h')
+
+    if trunkrev < 12832:
+      # Revision not exact -- test cases moved at some point between r12641 and
+      # r15537 (release_13 branchpoint)
+      c.mv('llvm/test/Regression/Analysis/LoadVN/call_cse.ll', 'llvm/test/Regression/Transforms/GCSE/call_cse.ll')
+      c.mv('llvm/test/Regression/Analysis/LoadVN/call_pure_function.ll', 'llvm/test/Regression/Transforms/GCSE/call_pure_function.ll')
+      c.mv('llvm/test/Regression/Analysis/LoadVN/RLE-Eliminate.ll', 'llvm/test/Regression/Transforms/GCSE/RLE-Eliminate.ll')
+      c.mv('llvm/test/Regression/Analysis/LoadVN/RLE-Preserve.ll', 'llvm/test/Regression/Transforms/GCSE/RLE-Preserve.ll')
+      c.mv('llvm/test/Regression/Analysis/LoadVN/RLE-Preserve-Volatile.ll', 'llvm/test/Regression/Transforms/GCSE/RLE-Preserve-Volatile.ll')
+
+    if trunkrev < 12004:
+      c.rm('llvm/lib/Target/SparcV9/MachineInstrAnnot.h')
+
     if trunkrev < 11826:
       # Renamed Sparc to SparcV9; copied ,v files (and the originals then got deleted later on...)
       c.mv('llvm/lib/Target/SparcV9', 'llvm/lib/Target/Sparc')
+      c.mv('llvm/lib/Target/Sparc/SparcV9AsmPrinter.cpp', 'llvm/lib/Target/Sparc/EmitAssembly.cpp')
+      c.mv('llvm/lib/Target/Sparc/SparcV9PeepholeOpts.cpp', 'llvm/lib/Target/Sparc/PeepholeOpts.cpp')
+      c.mv('llvm/lib/Target/Sparc/SparcV9PreSelection.cpp', 'llvm/lib/Target/Sparc/PreSelection.cpp')
+      c.mv('llvm/lib/Target/Sparc/SparcV9PrologEpilogInserter.cpp', 'llvm/lib/Target/Sparc/PrologEpilogCodeInserter.cpp')
+      c.mv('llvm/lib/Target/Sparc/SparcV9.burg.in', 'llvm/lib/Target/Sparc/Sparc.burg.in')
+      c.mv('llvm/lib/Target/Sparc/SparcV9TargetMachine.cpp', 'llvm/lib/Target/Sparc/Sparc.cpp') ### SparcV9.cpp?
+      c.mv('llvm/lib/Target/Sparc/SparcV9Instr.def', 'llvm/lib/Target/Sparc/SparcInstr.def')
+      c.mv('llvm/lib/Target/Sparc/SparcV9InstrInfo.cpp', 'llvm/lib/Target/Sparc/SparcInstrInfo.cpp')
+      c.mv('llvm/lib/Target/Sparc/SparcV9InstrSelection.cpp', 'llvm/lib/Target/Sparc/SparcInstrSelection.cpp')
+      c.mv('llvm/lib/Target/Sparc/SparcV9InstrSelectionSupport.h', 'llvm/lib/Target/Sparc/SparcInstrSelectionSupport.h')
+      c.mv('llvm/lib/Target/Sparc/SparcV9Internals.h', 'llvm/lib/Target/Sparc/SparcInternals.h')
+      c.mv('llvm/lib/Target/Sparc/SparcV9RegClassInfo.cpp', 'llvm/lib/Target/Sparc/SparcRegClassInfo.cpp')
+      c.mv('llvm/lib/Target/Sparc/SparcV9RegClassInfo.h', 'llvm/lib/Target/Sparc/SparcRegClassInfo.h')
+      c.mv('llvm/lib/Target/Sparc/SparcV9RegInfo.cpp', 'llvm/lib/Target/Sparc/SparcRegInfo.cpp')
+      c.mv('llvm/lib/Target/Sparc/SparcV9StackSlots.cpp', 'llvm/lib/Target/Sparc/StackSlots.cpp')
+      c.mv('llvm/lib/Target/Sparc/SparcV9SchedInfo.cpp', 'llvm/lib/Target/Sparc/UltraSparcSchedInfo.cpp')
 
-    # TODO: there's more cleanups that could be done earlier.
+    if trunkrev < 11719:
+      c.rm('llvm/lib/CodeGen/LiveIntervals.h')
+
+    if trunkrev < 11486:
+      c.rm('llvm/test/Regression/CodeGen/CBackend')
+
+    if trunkrev < 11415:
+      c.mv('llvm/lib/Target/CBackend', 'llvm/lib/CWriter')
+
+    if trunkrev < 10930:
+      c.rm('llvm/include/llvm/Analysis/SlotCalculator.h')
+
+    if trunkrev < 10807:
+      c.mv('llvm/lib/VMCore/ConstantFolding.cpp', 'llvm/lib/VMCore/ConstantHandling.cpp')
+
+    if trunkrev < 10804:
+      c.rm('llvm/lib/VMCore/ConstantFolding.h')
+
+    if trunkrev < 10733:
+      c.rm('llvm/lib/Target/Sparc/LiveVar')
+
+    if trunkrev < 10729:
+      c.rm('llvm/lib/Target/Sparc/InstrSelection')
+
+    if trunkrev < 10728:
+      c.rm('llvm/lib/Target/Sparc/RegAlloc')
+
+    if trunkrev < 10623:
+      c.rm('llvm/lib/VMCore/IntrinsicLowering.cpp')
+
+    if trunkrev < 10622:
+      c.rm('llvm/include/llvm/IntrinsicLowering.h')
+
+    if trunkrev < 10544:
+      c.rm('llvm/lib/ExecutionEngine/JIT/JIT.h')
+
+    if trunkrev < 10091:
+      for x in ['2002-12-23-LocalRAProblem.llx', '2002-12-23-SubProblem.llx',
+                '2003-08-03-CallArgLiveRanges.llx', '2003-08-23-DeadBlockTest.llx',
+                '2003-11-03-GlobalBool.llx']:
+        c.mv('llvm/test/Regression/CodeGen/X86/'+x, 'llvm/test/Regression/Jello/'+x)
+
+      for x in ['2002-12-16-ArgTest.ll', '2003-01-04-ArgumentBug.ll',
+                '2003-01-04-LoopTest.ll', '2003-01-04-PhiTest.ll',
+                '2003-01-09-SARTest.ll', '2003-01-10-FUCOM.ll',
+                '2003-01-15-AlignmentTest.ll', '2003-05-06-LivenessClobber.llx',
+                '2003-05-07-ArgumentTest.llx', '2003-05-11-PHIRegAllocBug.ll',
+                '2003-06-04-bzip2-bug.ll', '2003-06-05-PHIBug.ll',
+                '2003-08-15-AllocaAssertion.ll', '2003-08-21-EnvironmentTest.ll',
+                '2003-08-23-RegisterAllocatePhysReg.ll',
+                '2003-10-18-PHINode-ConstantExpr-CondCode-Failure.ll', 'hello2.ll',
+                'hello.ll', 'simplesttest.ll', 'simpletest.ll', 'test-arith.ll',
+                'test-branch.ll', 'test-call.ll', 'test-cast.ll',
+                'test-constantexpr.ll', 'test-fp.ll', 'test-loadstore.ll',
+                'test-logical.ll', 'test-loop.ll', 'test-malloc.ll', 'test-phi.ll',
+                'test-ret.ll', 'test-setcond-fp.ll', 'test-setcond-int.ll',
+                'test-shift.ll']:
+        c.mv('llvm/test/Regression/ExecutionEngine/'+x, 'llvm/test/Regression/Jello/'+x)
+
+    if trunkrev < 8875:
+      c.rm('llvm/utils/Burg')
+      c.rm('llvm/utils/TableGen')
+
+    if trunkrev < 8874:
+      c.rm('lib/Support')
 
     if trunkrev < 7750:
       c.rm('poolalloc')
@@ -521,7 +728,7 @@ class Filterer(object):
     # Extract only the name, ignore the email.
     oldauthor = oldauthor.split(' <')[0]
     for entry in self.authormap[oldauthor.lower()]:
-      if svnrev < entry[0]:
+      if svnrev <= entry[0]:
         return entry[1]
     raise Exception("Can't find author mapping for %s at %d" % (oldauthor, svnrev))
 
@@ -536,7 +743,7 @@ class Filterer(object):
       raise Exception("Can't find svn revision in %r", msg)
     return int(re_match.group(1))
 
-  def commit_filter(self, fm, githash, commit):
+  def commit_filter(self, fm, githash, commit, oldparents):
     try:
       svnrev = self.find_svnrev(commit.msg)
     except:

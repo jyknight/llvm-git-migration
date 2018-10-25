@@ -28,8 +28,8 @@ try:
   import regex
   supports_partial = True
 except ImportError:
-  print ('WARNING: could not import regex module; falling back to re module, '
-         'will be slower...')
+  #print ('WARNING: could not import regex module; falling back to re module, '
+  #       'will be slower...')
   import re as regex
   supports_partial = False
 
@@ -54,12 +54,12 @@ def object_type_from_mode(mode):
 class Commit(object):
   """Represents one commit object from Git."""
 
-  __slots__ = ['tree', 'parents', 'author', 'author_date', 'committer',
+  __slots__ = ['treehash', 'parents', 'author', 'author_date', 'committer',
                'committer_date', 'msg']
 
-  def __init__(self, tree=None, parents=None, author=None, author_date=None,
+  def __init__(self, treehash=None, parents=None, author=None, author_date=None,
                committer=None, committer_date=None, msg=None):
-    self.tree = tree
+    self.treehash = treehash
     self.parents = parents
     if parents is None:
       self.parents = []
@@ -70,12 +70,12 @@ class Commit(object):
     self.msg = msg
 
   def copy(self):
-    return Commit(tree=self.tree, parents=self.parents[:], author=self.author,
+    return Commit(treehash=self.treehash, parents=self.parents[:], author=self.author,
                   author_date=self.author_date, committer=self.committer,
                   committer_date=self.committer_date, msg=self.msg)
 
   def __eq__(self, other):
-    return (self.tree == other.tree and
+    return (self.treehash == other.treehash and
             self.parents == other.parents and
             self.author == other.author and
             self.author_date == other.author_date and
@@ -86,6 +86,8 @@ class Commit(object):
   def __ne__(self, other):
     return not self.__eq__(other)
 
+  def get_tree_entry(self):
+    return TreeEntry('40000', self.treehash)
 
 class Tag(object):
   """Represents one tag object from Git."""
@@ -305,10 +307,14 @@ class CatFileInput(object):
 
     headers, commit.msg = response.split('\n\n', 1)
     for header in headers.split('\n'):
+      if header[0] == ' ':
+        # Continuation line -- only relevant at the moment for gpgsig, which we
+        # ignore.
+        continue
       header_kind, header_data = header.split(' ', 1)
 
       if header_kind == 'tree':
-        commit.tree = header_data
+        commit.treehash = header_data
       elif header_kind == 'parent':
         commit.parents.append(header_data)
       elif header_kind == 'author':
@@ -317,6 +323,8 @@ class CatFileInput(object):
       elif header_kind == 'committer':
         commit.committer, commit.committer_date = header_data.split('> ', 1)
         commit.committer = commit.committer + '>'
+      elif header_kind == 'gpgsig':
+        pass
       else:
         raise Exception('Unexpected commit header', header)
 
@@ -393,7 +401,7 @@ class FastImportStream(object):
               commit.msg, ALL_ZERO_HASH)
     for p in commit.parents:
         s += 'merge %s\n' % p
-    s += 'M 40000 %s \n\n' % commit.tree
+    s += 'M 40000 %s \n\n' % commit.treehash
     self.process.stdin.write(s)
     return ':%d' % mark
 
@@ -485,7 +493,9 @@ class FilterManager(object):
 
   def get_mark(self, mark):
     """Returns the SHA1 corresponding to a mark"""
-    return self._fast_import.get_mark(mark)
+    if mark.startswith(':'):
+      return self._fast_import.get_mark(mark)
+    return mark
 
   def write_tree(self, entries):
     """Writes a git tree given a list of 'TreeEntry's. Returns the hash,
@@ -664,7 +674,7 @@ class CachingTreeTransformer(_TreeTransformerBase):
     self._mapping[(cache_prefix, oldtree.githash)] = tree
     return tree
 
-def list_refs():
+def list_branches_tags():
   return subprocess.check_output(['git', '-c', 'core.warnAmbiguousRefs=false',
                                   'rev-parse', '--symbolic-full-name',
                                   '--branches', '--tags']).split('\n')[:-1]
@@ -734,15 +744,21 @@ def update_refs(fm, reflist, revmap, backup_prefix, tag_filter, msg_filter):
 
 def do_filter(commit_filter=None, tag_filter=None, global_file_actions=None,
               prefix_sensitive=True, msg_filter=None,
-              backup_prefix='refs/original', revmap_filename=None):
-  fm = FilterManager()
+              backup_prefix='refs/original', revmap_filename=None, reflist=None,
+              filter_manager=None):
+  if filter_manager:
+    fm = filter_manager
+  else:
+    fm = FilterManager()
 
   if global_file_actions:
     gtt = CachingTreeTransformer(fm, file_changes=global_file_actions, prefix_sensitive=prefix_sensitive)
   else:
     gtt = None
 
-  reflist = list_refs()
+  if reflist is None:
+    reflist = list_branches_tags()
+
   print 'Getting list of commits...'
   # Get list of commits to work on:
   revlist = subprocess.check_output(['git', 'rev-list', '--reverse',
@@ -768,17 +784,34 @@ def do_filter(commit_filter=None, tag_filter=None, global_file_actions=None,
 
     oldcommit = fm.get_commit(rev)
     commit = oldcommit.copy()
+
+    oldparents = commit.parents
     commit.parents = [revmap.get(p, p) for p in commit.parents]
+
+    updatefunc = None
 
     if msg_filter is not None:
       commit.msg = msg_filter(commit.msg)
     if gtt is not None:
-      commit.tree = gtt.transform(commit.tree)
+      commit.treehash = gtt.transform(commit.treehash)
+
     if commit_filter is not None:
-      commit = commit_filter(fm, rev, commit)
+      result = commit_filter(fm, rev, commit, oldparents)
+      if isinstance(result, str):
+        # Special case: string result
+        if result != rev:
+          revmap[rev] = result
+        continue
+      elif isinstance(result, tuple):
+        commit, updatefunc = result
+      else:
+        commit = result
 
     if commit != oldcommit:
-      revmap[rev] = fm.write_commit(commit)
+      newhash = fm.write_commit(commit)
+      revmap[rev] = newhash
+      if updatefunc is not None:
+        updatefunc(newhash)
 
   update_refs(fm, reflist, revmap, backup_prefix, tag_filter, msg_filter)
 
@@ -786,14 +819,16 @@ def do_filter(commit_filter=None, tag_filter=None, global_file_actions=None,
     revmap_out = open(revmap_filename + '.tmp', 'w')
     for oldrev, newrev in revmap.iteritems():
       # Make sure the revs we're writing are real sha1s, not marks
-      if newrev.startswith(':'):
-        newrev = fm.get_mark(newrev)
+      newrev = fm.get_mark(newrev)
       revmap_out.write('%s %s\n' % (oldrev, newrev))
 
   if gtt is not None:
     gtt.dump_stats()
   print 'Filtered %d commits, %d were changed.' % (len(revlist), len(revmap))
-  fm.close()
+
+  if not filter_manager:
+    # Don't close if we were passed one on input
+    fm.close()
 
   if revmap_filename:
     os.rename(revmap_filename + '.tmp', revmap_filename)

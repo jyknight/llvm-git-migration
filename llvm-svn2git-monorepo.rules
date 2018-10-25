@@ -115,6 +115,20 @@ match /lldb/branches/apple/calcite/lldb/
   branch refs/pristine/apple/calcite
 end match
 
+# Normally I'd handle this via NESTED_BRANCHNAMES, but there's also a
+# libcxx/apple which isn't nested.
+match /lldb/branches/(apple/[^/]+)/
+  repository monorepo
+  prefix lldb/
+  branch refs/pristine/\1
+end match
+
+# Ignore delete and rebranch of /llvm/trunk
+match /llvm/trunk/
+  min revision 70891
+  max revision 70892
+end match
+
 # Ignore old stacker branches -- they're just cvs conversion detreitus.
 match /stacker/(?:branches|tags)/
   max revision 31457
