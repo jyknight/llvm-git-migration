@@ -40,7 +40,10 @@ class Migrator:
     if re_match.group(1) is not None:
       return int(re_match.group(1)), None
     else:
-      return int(re_match.group(3)), re_match.group(2)
+      subproject = re_match.group(2)
+      if subproject == 'cfe':
+        subproject = 'clang'
+      return int(re_match.group(3)), subproject
 
   def detect_new_svn_revisions(self):
     """Walk all refs under new_upstream_prefix, and find their svn revisions."""
