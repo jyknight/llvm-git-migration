@@ -75,7 +75,7 @@ class Migrator:
     refs = expand_ref_pattern([self.old_upstream_prefix])
 
     if not refs:
-      raise Exception("No refs matched new upstream prefix")
+      raise Exception("No refs matched old upstream prefix %s" % self.old_upstream_prefix)
 
     self.oldrev_set = set(subprocess.check_output(['git', 'rev-list'] + refs).split('\n')[:-1])
     for rev in self.oldrev_set:
