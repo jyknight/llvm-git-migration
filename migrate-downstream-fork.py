@@ -2,6 +2,7 @@
 
 import argparse
 import fast_filter_branch
+import os
 import re
 import subprocess
 import sys
@@ -146,7 +147,10 @@ class Migrator:
   def run(self):
     if self.revmap_file:
       # Only supports output, not input
-      os.path.remove(self.revmap_file)
+      try:
+        os.remove(self.revmap_file)
+      except OSError:
+        pass
 
     self.fm = fast_filter_branch.FilterManager()
     print "Detecting new svn revisions..."
