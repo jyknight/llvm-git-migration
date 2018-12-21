@@ -7,7 +7,7 @@ import re
 import subprocess
 import sys
 
-svnrev_re=re.compile('^llvm-svn=([0-9]+)\n\Z|^git-svn-id: https?://llvm.org/svn/llvm-project/([^/]*).*@([0-9]+) [0-9a-f-]*\n\Z', re.MULTILINE)
+svnrev_re=re.compile('^llvm-svn: ([0-9]+)\n\Z|^git-svn-id: https?://llvm.org/svn/llvm-project/([^/]*).*@([0-9]+) [0-9a-f-]*\n\Z', re.MULTILINE)
 
 def expand_ref_pattern(patterns):
   return subprocess.check_output(

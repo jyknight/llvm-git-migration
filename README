@@ -103,8 +103,8 @@ More things to be done:
 1. Editing commit messages (do we want to replace r12345 -> git
    hash?). Decided this is probably not worthwhile. Mapping from svn
    rev to githash is easy enough, e.g.:
-       git show :/llvm-svn=3009\\b
-       git rev-parse :/llvm-svn=3009\\b
+       git show ':/llvm-svn: 3009\b'
+       git rev-parse ':/llvm-svn: 3009\b'
 
 2. Extracting authorship information from commit message "Patch by
    XXXX!" lines. (Decided that we're NOT going to do this, since

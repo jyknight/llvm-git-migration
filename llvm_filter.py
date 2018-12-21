@@ -8,7 +8,7 @@ import subprocess
 import sys
 from multiprocessing.dummy import Pool as ThreadPool
 
-svnrev_re=re.compile('^llvm-svn=([0-9]*)\n', re.MULTILINE)
+svnrev_re=re.compile('^llvm-svn: ([0-9]*)\n', re.MULTILINE)
 
 class CvsFixup(object):
   def __init__(self, fm, tree):
@@ -689,8 +689,8 @@ class Filterer(object):
     # Clean up svn2git cruft in commit messages.  Also deal with
     # extraneous trailing newlines, and add a note where there's no
     # commit message other than the added revision info.
-    msg = re.sub('\n+svn path=[^\n]*; revision=([0-9]*)\n?$', '\n\nllvm-svn=\\1\n', msg)
-    if msg.startswith("\n\nllvm-svn="):
+    msg = re.sub('\n+svn path=[^\n]*; revision=([0-9]*)\n?$', '\n\nllvm-svn: \\1\n', msg)
+    if msg.startswith("\n\nllvm-svn: "):
       msg = '(no commit message)' + msg
     return msg
 

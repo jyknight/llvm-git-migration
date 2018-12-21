@@ -41,8 +41,82 @@ def format_raw_time(raw_time):
   time_tuple = time.gmtime(int_time)
   return time.strftime("%a %b %d %H:%M:%S %Y ", time_tuple) + tz
 
+# Let's pretend some tag heads were different; typically someone made an extra
+# commit to the tag after it was created.
+SPECIAL_CASED_TAG_REPLACEMENTS = {
+    # A commit added lldb and polly at a different base rev.
+    'refs/heads/svntag/RELEASE_33/rc1': 'refs/heads/svntag/RELEASE_33/rc1^',
+    # Added extra PPC release notes directly to the tag.
+    'refs/heads/svntag/RELEASE_33/rc3': 'refs/heads/svntag/RELEASE_33/rc3^',
+    # Added libunwind at a different base rev.
+    'refs/heads/svntag/RELEASE_370/rc1': 'refs/heads/svntag/RELEASE_370/rc1^',
+    # Added extra PPC release notes.
+    'refs/heads/svntag/RELEASE_390/rc2': 'refs/heads/svntag/RELEASE_390/rc2^',
+}
+
+# Leaving unhandled: RELEASE_33/dot1-rc2; it's a mess and there was no 3.3.1 final anyways.
+
+# Sometimes the automatic determination of the base revision for a tag fails,
+# due to CVS->SVN conversion detreitus.
+SPECIAL_CASED_TAG_BASES = {
+    # These all were created with the wrong parent commit, but a tree matching
+    # the correct parent.
+    'refs/heads/svntag/RELEASE_22': 'refs/heads/release_22',
+    'refs/heads/svntag/RELEASE_20': 'refs/heads/release_20',
+    'refs/heads/svntag/RELEASE_19': 'refs/heads/release_19~9',
+    'refs/heads/svntag/RELEASE_16': 'refs/heads/release_16',
+    'refs/heads/svntag/RELEASE_15': 'refs/heads/release_15',
+    # extraneous file llvm/docs/LLVMVsTheWorld.html in the tag.
+    'refs/heads/svntag/RELEASE_14': 'refs/heads/release_14',
+    # missing file llvm/lib/Support/ConstantRange.cpp in the tag.
+    'refs/heads/svntag/RELEASE_13': 'refs/heads/release_13',
+    # Wrong parent again.
+    'refs/heads/svntag/RELEASE_12': 'refs/heads/release_12',
+    # extraneous file llvm/docs/LLVMVsTheWorld.html
+    'refs/heads/svntag/RELEASE_11': 'refs/heads/release_11',
+    # extraneous file llvm/docs/ReleaseTasks.html
+    'refs/heads/svntag/RELEASE_1': 'refs/heads/release_1',
+}
+
+# We rename the official release tags to "llvmorg-7.0.1-rc1" or "llvmorg-7.0.0"
+def map_tagname(oldname):
+  if not oldname.startswith("RELEASE_"):
+    return oldname
+  if oldname == 'RELEASE_342/final':
+    return oldname # duplicate
+
+  oldname = oldname[len("RELEASE_"):]
+  if '/' in oldname:
+    vers, kind = oldname.split('/', 1)
+  else:
+    vers, kind = oldname, ''
+
+  # Handle the weird names used in 34 and 35 releases;
+  # Map (34, dot1-final) -> (341, final)
+  dotfoo = re.match("dot([0-9])-(.*)$", kind)
+  if dotfoo:
+    vers += dotfoo.group(1)
+    kind = dotfoo.group(2)
+
+  # e.g. 1 -> 100, 27 -> 270
+  while len(vers) < 3:
+    vers += '0'
+
+  # Add dots to version
+  vers = vers[0:-2] + "." + vers[-2:-1] + "." + vers[-1:]
+
+  # Remove "final"
+  if kind == "final":
+    kind = ""
+
+  if kind:
+    return "llvmorg-" + vers + '-' + kind
+  else:
+    return "llvmorg-" + vers
+
+
 def convert_tagref(fm, tagname, branch_rev_set):
-  tag_commit = fm.get_commit(tagname)
+  tag_commit = fm.get_commit(SPECIAL_CASED_TAG_REPLACEMENTS.get(tagname, tagname))
   if tag_commit.treehash == fast_filter_branch.GIT_EMPTY_TREE_HASH:
     # If we have an empty tree, just remove the tag.
     print "%s: OK: empty tree, removing" % tagname
@@ -80,21 +154,30 @@ def convert_tagref(fm, tagname, branch_rev_set):
     commits_in_tag.append(commit)
 
   #print tag_parent_hash_candidates
-  for tag_parent_hash in tag_parent_hash_candidates:
-    # Check if the trees are equivalent, per definition at the top.
-    tag_tree = fm.get_tree(tag_commit.treehash)
-    parent_tree = fm.get_tree(fm.get_commit(tag_parent_hash).treehash)
-    #print "Trees:", tag_tree, parent_tree
 
-    if any(entry not in parent_tree.iteritems() for entry in tag_tree.iteritems()):
-      # Mismatched trees -- next!
-      continue
+  # Check if we have a special case for the tag base that wouldn't be matched normally.
+  selected_parent = SPECIAL_CASED_TAG_BASES.get(tagname, None)
 
+  if selected_parent is None:
+    # Normal case -- we don't have a special case, so just search.
+    for tag_parent_hash in tag_parent_hash_candidates:
+      # Check if the trees are equivalent, per definition at the top.
+      tag_tree = fm.get_tree(tag_commit.treehash)
+      parent_tree = fm.get_tree(fm.get_commit(tag_parent_hash).treehash)
+      #print "Trees:", tag_tree, parent_tree
+
+      if not any(entry not in parent_tree.iteritems() for entry in tag_tree.iteritems()):
+        # Matching trees, yay!
+        selected_parent = tag_parent_hash
+        break
+
+  # Did we find anything?
+  if selected_parent is not None:
     # OKAY! Let's make the tag!
-    bare_tagname = re.sub('refs/heads/svntag/', '', tagname)
-    newtag = fast_filter_branch.Tag(object_hash=tag_parent_hash, name=bare_tagname,
-                                    tagger=commits_in_tag[0].committer, tagger_date=commits_in_tag[0].committer_date,
-                                    msg=commits_in_tag[0].msg)
+    new_tagname = map_tagname(re.sub('refs/heads/svntag/', '', tagname))
+    newtag = fast_filter_branch.Tag(object_hash=selected_parent, name=new_tagname,
+                                    tagger=tag_commit.committer, tagger_date=tag_commit.committer_date,
+                                    msg=tag_commit.msg)
 
     if len(commits_in_tag) > 1:
       newtag.msg += '\n--\nSVN tag also included these previous commits:\n'
@@ -111,6 +194,7 @@ def convert_tagref(fm, tagname, branch_rev_set):
     fm.write_tag(newtag)
     print "%s: OK: Wrote as a real tag, superseding %d commits!" % (tagname, len(commits_in_tag))
     return
+
   print "%s: ERR: tree not equivalent to potential parents %s" % (tagname, list(tag_parent_hash_candidates))
 
 

@@ -27,18 +27,42 @@ D $proj
 EOF
 }
 
+get_cleaned_branchname() {
+  ref=$1
+  name=${ref#refs/heads/release_}
+
+  if [[ $name == 1 ]]; then
+    echo "1.0.x"
+  elif [[ $name =~ [0-3][0-9] ]]; then
+    echo "${name:0:1}.${name:1:1}.x"
+  elif [[ $name = *0 ]]; then
+    echo "${name:0:-1}.x"
+  else
+    echo "${name}"
+  fi
+}
+
 repo_filter_steps() {
   local repo=$1
 
   cd $repo
   # Clear and reset refs to filter
-  git for-each-ref --format="delete %(refname)" refs/heads refs/tags | git update-ref --stdin
-  set +x
-  eval "$(git for-each-ref --shell --format='refname=%(refname); echo create "refs/heads/${refname#refs/pristine/}" "${refname}"' refs/pristine)" | git update-ref --stdin
+  git for-each-ref --format="delete %(refname)" refs/heads refs/tags refs/clean-heads refs/clean-tags | git update-ref --stdin
+  { set +x; } 2>/dev/null
+  eval "$(git for-each-ref --format='refname=%(refname); echo create "refs/heads/${refname#refs/pristine/}" "${refname}"' refs/pristine)" | git update-ref --stdin
   set -x
   # Run the filter
   $mydir/llvm_filter.py $repo $mydir/author-ids.conf
   $mydir/fixup-tags.py
+
+  { set +x; } 2>/dev/null
+  for ref in $(git for-each-ref --format="%(refname)" refs/heads/release_*); do
+    newref="refs/heads/release/$(get_cleaned_branchname "$ref")"
+    echo "renaming $ref to $newref"
+    git update-ref "$newref" "$ref"
+    git update-ref -d "$ref"
+  done
+  set -x
   cd ..
 }
 

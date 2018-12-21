@@ -92,7 +92,7 @@ match /(${ARCHIVE_PROJECTS})/(${BRANCH_PATTERNS}|${TAG_PATTERNS})/
   repository archive
   prefix \1/
   branch refs/pristine/\2
-  substitute branch s!^refs/pristine/tags/RELEASE_35$!refs/pristine/tags/RELEASE_350!
+  substitute branch s!^refs/pristine/tags/RELEASE_35/rc1$!refs/pristine/tags/RELEASE_350/rc1!
   substitute branch s!^refs/pristine/tags/RELEASE_28$!refs/pristine/tags/RELEASE_28/final!
   substitute branch s!^refs/pristine/branches/apple$!refs/pristine/branches/apple-base!
   substitute branch s!^refs/pristine/tags/!refs/pristine/svntag/!
@@ -121,7 +121,7 @@ end match
 match /(${SEPARATED_PROJECTS})/(${BRANCH_PATTERNS}|${TAG_PATTERNS})/
   repository \1
   branch refs/pristine/\2
-  substitute branch s!^refs/pristine/tags/RELEASE_35$!refs/pristine/tags/RELEASE_350!
+  substitute branch s!^refs/pristine/tags/RELEASE_35/rc1$!refs/pristine/tags/RELEASE_350/rc1!
   substitute branch s!^refs/pristine/tags/RELEASE_28$!refs/pristine/tags/RELEASE_28/final!
   substitute branch s!^refs/pristine/branches/apple$!refs/pristine/branches/apple-base!
   substitute branch s!^refs/pristine/tags/!refs/pristine/svntag/!
