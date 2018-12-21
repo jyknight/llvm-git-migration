@@ -313,6 +313,7 @@ class CatFileInput(object):
         continue
       header_kind, header_data = header.split(' ', 1)
 
+      encoding = None
       if header_kind == 'tree':
         commit.treehash = header_data
       elif header_kind == 'parent':
@@ -323,10 +324,20 @@ class CatFileInput(object):
       elif header_kind == 'committer':
         commit.committer, commit.committer_date = header_data.split('> ', 1)
         commit.committer = commit.committer + '>'
+      elif header_kind == 'encoding':
+        encoding = header_data
       elif header_kind == 'gpgsig':
+        # Ignore gpgsig headers -- if we rewrite the commit, it's impossible to
+        # re-sign it, anyways.
         pass
       else:
         raise Exception('Unexpected commit header', header)
+
+    if encoding is not None:
+      # I'll just eagerly re-encode commit messages from the source encoding
+      # into utf-8, as git-fast-import cannot handle non-utf8 encodings.
+      msg_unicode = commit.msg.decode(encoding, error='replace')
+      commit.msg = msg_unicode.encode('utf-8')
 
     return commit
 
