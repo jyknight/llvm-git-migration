@@ -8,6 +8,27 @@ import subprocess
 import sys
 from multiprocessing.dummy import Pool as ThreadPool
 
+# A "paragraph" must match this to be considered a trailer.  This should
+# identify a stricter subset of git's algorithm -- it doesn't have all the
+# special cases that loosen the match requirement.
+TRAILER_FORMAT=re.compile(
+    '(?:' +
+    # <token>:<whitespace><value>
+    '[a-zA-Z0-9-]+:[ \t].*\n' +
+    # Possibly with <whitespace> <continuation value> lines
+    '(?:[ \t].*\n)*' +
+    # repeated, followed by end of string
+    ')+$')
+
+def has_git_trailer(msg):
+  lastblock_pos = msg.rfind('\n\n')
+  if lastblock_pos > 0:
+    lastblock = msg[lastblock_pos+2:]
+    lastblock = lastblock.rstrip('\n') + '\n'
+    if TRAILER_FORMAT.match(lastblock):
+      return True
+  return False
+
 svnrev_re=re.compile('^llvm-svn: ([0-9]*)\n', re.MULTILINE)
 
 class CvsFixup(object):
@@ -237,9 +258,6 @@ class Filterer(object):
     if trunkrev < 33278:
       # Copied from llvm/projects/Stacker to stacker/; ,v copied
       c.rm('stacker')
-
-#    if trunkrev < 32575 and branchname != 'refs/heads/release_19':
-#      c.rm('FIXMEFIXMEpoolalloc?')
 
     if trunkrev < 30864:
       # moved at some point...between 30591 and 30864
@@ -668,7 +686,6 @@ class Filterer(object):
     # Some binary files were not marked binary, and had their CR bytes
     # mangled into LFs. Restore the originals from release tarballs
     # where possible.
-    # FIXME: only add when it existed.
     if trunkrev < 32132:
       if trunkrev >= 26473:
         c.addfile('llvm/test/Regression/Bytecode/memcpy.ll.bc-16', '12a322e5e3f9b9d8bc6021435faffb754fcfb91c')
@@ -686,12 +703,24 @@ class Filterer(object):
       c.addfile('llvm/test/Regression/Transforms/LoopSimplify/2006-08-11-LoopSimplifyLongTime.ll.bc', '9ccf0117c09fa458479a32efef0b46c41dbe398d')
 
   def msg_filter(self, msg):
+    # Make sure there's not an llvm-svn: line already in the message -- prefix
+    # it with a '> ' if so.
+    msg = svnrev_re.sub('> \\g<0>', msg)
+
     # Clean up svn2git cruft in commit messages.  Also deal with
     # extraneous trailing newlines, and add a note where there's no
     # commit message other than the added revision info.
-    msg = re.sub('\n+svn path=[^\n]*; revision=([0-9]*)\n?$', '\n\nllvm-svn: \\1\n', msg)
-    if msg.startswith("\n\nllvm-svn: "):
-      msg = '(no commit message)' + msg
+    match = re.search('\n+svn path=[^\n]*; revision=([0-9]*)\n*$', msg)
+    if match:
+      msg = msg[:match.start()]
+      if not msg:
+        msg = '(no commit message)'
+
+      # If the last paragraph of the message doesn't look like a git trailer,
+      # add a blank line, to make a new trailer section.
+      if not has_git_trailer(msg):
+        msg += '\n'
+      msg += '\nllvm-svn: %s\n' % (match.group(1),)
     return msg
 
   def combine_consecutive_merges(self, fm, commit, svnrev):
