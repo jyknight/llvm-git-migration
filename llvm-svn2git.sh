@@ -158,7 +158,7 @@ incremental_update() {
     # And rerun filtering
     repo_filter_steps $repo
     # And, run a gc to auto-repack as required.
-    git -C $repo gc --auto
+    git -C $repo -c gc.auto=1 gc --auto
   done
 }
 
