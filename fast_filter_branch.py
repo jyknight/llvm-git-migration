@@ -367,6 +367,13 @@ class CatFileInput(object):
 
     return tag
 
+  def parse_blob(self, githash):
+    kind, response = self._parse_object(githash)
+    if kind != 'blob':
+      raise Exception('Unexpected object kind: %r is a %r not a blob',
+                      githash, kind)
+    return response
+
   def get_object_type(self, githash):
     kind, response = self._parse_object(githash)
     return kind
@@ -501,6 +508,9 @@ class FilterManager(object):
 
   def get_tag(self, githash):
     return self._cat_file.parse_tag(githash)
+
+  def get_blob(self, githash):
+    return self._cat_file.parse_blob(githash)
 
   def get_mark(self, mark):
     """Returns the SHA1 corresponding to a mark"""
