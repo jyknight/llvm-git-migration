@@ -116,7 +116,7 @@ def expand_ref_pattern(patterns):
 
 class Zipper:
   """Destructively zip a submodule umbrella repository."""
-  def __init__(self, new_upstream_prefix, revmap_in_file, revmap_out_file, reflist, debug):
+  def __init__(self, new_upstream_prefix, revmap_in_file, revmap_out_file, reflist, debug, abort_bad_submodule):
     if not new_upstream_prefix.endswith('/'):
       new_upstream_prefix = new_upstream_prefix + '/'
 
@@ -130,6 +130,7 @@ class Zipper:
     self.revap                   = {}
     self.dbg                     = debug
     self.prev_submodules         = []
+    self.abort_bad_submodule     = abort_bad_submodule
 
   def debug(self, msg):
     if self.dbg:
@@ -184,12 +185,9 @@ class Zipper:
           # want to skip it, then we really don't know what to do and
           # the user will have to fix things up and try again.
           print 'WARNING: No commit %s for submodule %s in commit %s' % (e.githash, name, githash)
-          answer = self.get_user_yes_no('Skip?')
-
-          if answer is "y":
-            continue
-          else:
+          if self.abort_bad_submodule:
             raise Exception('No commit %s for submodule %s in commit %s' % (e.githash, name, githash))
+          continue
 
         submodule_entry = (name, e.githash)
         submodules.append(submodule_entry)
@@ -406,8 +404,8 @@ Typical usage:
                       help="The prefix for all the refs of the new repository (default: %(default)s).")
   parser.add_argument("reflist", metavar="REFPATTERN", help="Patterns of the references to convert.", nargs='*')
   parser.add_argument("--revmap-in", metavar="FILE", default=None)
-  parser.add_argument("--revmap-out", metavar="FILE", default=None,
-                      help="The prefix for umbrella refs (default: %(default)s).")
+  parser.add_argument("--revmap-out", metavar="FILE", default=None)
   parser.add_argument("--debug", help="Turn on debug output.", action="store_true")
+  parser.add_argument("--abort-bad-submodule", help="Abort on bad submodule updates.", action="store_true")
   args = parser.parse_args()
-  Zipper(args.new_repo_prefix, args.revmap_in, args.revmap_out, args.reflist, args.debug).run()
+  Zipper(args.new_repo_prefix, args.revmap_in, args.revmap_out, args.reflist, args.debug, args.abort_bad_submodule).run()
