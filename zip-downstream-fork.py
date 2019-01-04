@@ -116,7 +116,8 @@ def expand_ref_pattern(patterns):
 
 class Zipper:
   """Destructively zip a submodule umbrella repository."""
-  def __init__(self, new_upstream_prefix, revmap_in_file, revmap_out_file, reflist, debug, abort_bad_submodule):
+  def __init__(self, new_upstream_prefix, revmap_in_file, revmap_out_file,
+               reflist, debug, abort_bad_submodule, no_rewrite_commit_msg):
     if not new_upstream_prefix.endswith('/'):
       new_upstream_prefix = new_upstream_prefix + '/'
 
@@ -131,6 +132,7 @@ class Zipper:
     self.dbg                     = debug
     self.prev_submodules         = []
     self.abort_bad_submodule     = abort_bad_submodule
+    self.no_rewrite_commit_msg   = no_rewrite_commit_msg
 
   def debug(self, msg):
     if self.dbg:
@@ -284,6 +286,14 @@ class Zipper:
       self.debug('No submodule updates')
       return self.substitute_commit(commit, githash)
 
+    prev_submodules_map = {}
+
+    if not self.no_rewrite_commit_msg:
+      # Track the old hashes for submodules so we know which
+      # submodules this commit updated below.
+      for prev_submodule_name, prev_submodule_hash in self.prev_submodules:
+        prev_submodules_map[prev_submodule_name] = prev_submodule_hash
+
     self.prev_submodules = submodules
 
     # The content of the commit should be the combination of the
@@ -292,6 +302,11 @@ class Zipper:
 
     upstream_parents = []
     submodule_add_parents = []
+
+    new_commit_msg = ''
+    if self.no_rewrite_commit_msg:
+      new_commit_msg = commit.msg
+
     for name, oldhash in submodules:
       self.debug('Found submodule (%s, %s)' % (name, oldhash))
       newhash = self.revmap.get(oldhash, oldhash)
@@ -312,6 +327,13 @@ class Zipper:
           # entire contents of the commit's tree.
           submodule_tree = newcommit.get_tree_entry()
         newtree = newtree.add_path(self.fm, name.split('/'), submodule_tree)
+
+      if not self.no_rewrite_commit_msg:
+        if not name in prev_submodules_map or prev_submodules_map[name] != oldhash:
+          if not new_commit_msg:
+            new_commit_msg = newcommit.msg
+          else:
+            new_commit_msg += '\n' + newcommit.msg
 
       # Rewrite parents.  If this commit added a new submodule, add a
       # parent to the corresponding commit.  If one of the submodule
@@ -336,6 +358,7 @@ class Zipper:
     commit.treehash = newtree.githash
     commit.parents.extend(submodule_add_parents)
     commit.parents.extend(upstream_parents)
+    commit.msg = new_commit_msg
 
     return commit
 
@@ -376,7 +399,9 @@ are skipped.
 
 The umbrella history is rewritten so that each commit appears to have
 been done directly to the umbrella, instead of via a submodule update.
-Merges from upstream monorepo commits are preserved.
+Merges from upstream monorepo commits are preserved.  The commit
+message is replaced by the commit message(s) from the updated
+submodule(s), unless --no-rewrite-commit-msg is given.
 
 This tool DESTRUCTIVELY MODIFIES the umbrella branch it is run on!
 
@@ -400,12 +425,18 @@ Typical usage:
   zip-downstream-fork.py refs/remotes/umbrella --revmap-in=$file
 """,
   formatter_class=argparse.RawDescriptionHelpFormatter)
-  parser.add_argument("--new-repo-prefix", metavar="REFNAME", default="refs/remotes/monorepo",
+  parser.add_argument("--new-repo-prefix", metavar="REFNAME",
+                      default="refs/remotes/monorepo",
                       help="The prefix for all the refs of the new repository (default: %(default)s).")
-  parser.add_argument("reflist", metavar="REFPATTERN", help="Patterns of the references to convert.", nargs='*')
+  parser.add_argument("reflist", metavar="REFPATTERN",
+                      help="Patterns of the references to convert.", nargs='*')
   parser.add_argument("--revmap-in", metavar="FILE", default=None)
   parser.add_argument("--revmap-out", metavar="FILE", default=None)
   parser.add_argument("--debug", help="Turn on debug output.", action="store_true")
-  parser.add_argument("--abort-bad-submodule", help="Abort on bad submodule updates.", action="store_true")
+  parser.add_argument("--abort-bad-submodule",
+                      help="Abort on bad submodule updates.", action="store_true")
+  parser.add_argument("--no-rewrite-commit-msg",
+                      help="Don't rewrite the submodule update commit message with the merged commit message.", action="store_true")
   args = parser.parse_args()
-  Zipper(args.new_repo_prefix, args.revmap_in, args.revmap_out, args.reflist, args.debug, args.abort_bad_submodule).run()
+  Zipper(args.new_repo_prefix, args.revmap_in, args.revmap_out, args.reflist,
+         args.debug, args.abort_bad_submodule, args.no_rewrite_commit_msg).run()
