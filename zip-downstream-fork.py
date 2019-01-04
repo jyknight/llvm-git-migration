@@ -117,7 +117,8 @@ def expand_ref_pattern(patterns):
 class Zipper:
   """Destructively zip a submodule umbrella repository."""
   def __init__(self, new_upstream_prefix, revmap_in_file, revmap_out_file,
-               reflist, debug, abort_bad_submodule, no_rewrite_commit_msg):
+               reflist, debug, abort_bad_submodule, no_rewrite_commit_msg,
+               skipped_pick_first):
     if not new_upstream_prefix.endswith('/'):
       new_upstream_prefix = new_upstream_prefix + '/'
 
@@ -133,6 +134,7 @@ class Zipper:
     self.prev_submodules         = []
     self.abort_bad_submodule     = abort_bad_submodule
     self.no_rewrite_commit_msg   = no_rewrite_commit_msg
+    self.skipped_pick_first      = skipped_pick_first
 
   def debug(self, msg):
     if self.dbg:
@@ -241,7 +243,14 @@ class Zipper:
   def substitute_commit(self, commit, githash):
     parent_choice = 0
     if len(commit.parents) != 1:
-      parent_choice = self.prompt_for_parent(commit, githash)
+      if self.skipped_pick_first:
+        subject = commit.msg.splitlines()[0]
+        first_parent = commit.parents[0]
+        first_parent_commit = self.fm.get_commit(first_parent)
+        first_parent_subject = first_parent_commit.msg.splitlines()[0]
+        print 'WARNING: Multiple parents for skipped commit (%s %s), picking first (%s %s)' % (githash, subject, first_parent, first_parent_subject)
+      else:
+        parent_choice = self.prompt_for_parent(commit, githash)
 
     # Map this to the parent commit to skip it.
     return commit.parents[parent_choice]
@@ -437,6 +446,9 @@ Typical usage:
                       help="Abort on bad submodule updates.", action="store_true")
   parser.add_argument("--no-rewrite-commit-msg",
                       help="Don't rewrite the submodule update commit message with the merged commit message.", action="store_true")
+  parser.add_argument("--skipped-pick-first",
+                      help="If a skipped commit has multiple parents, pick the first one as a replacement.", action="store_true")
   args = parser.parse_args()
   Zipper(args.new_repo_prefix, args.revmap_in, args.revmap_out, args.reflist,
-         args.debug, args.abort_bad_submodule, args.no_rewrite_commit_msg).run()
+         args.debug, args.abort_bad_submodule, args.no_rewrite_commit_msg,
+         args.skipped_pick_first).run()
