@@ -435,7 +435,7 @@ Typical usage:
 """,
   formatter_class=argparse.RawDescriptionHelpFormatter)
   parser.add_argument("--new-repo-prefix", metavar="REFNAME",
-                      default="refs/remotes/monorepo",
+                      default="refs/remotes/new",
                       help="The prefix for all the refs of the new repository (default: %(default)s).")
   parser.add_argument("reflist", metavar="REFPATTERN",
                       help="Patterns of the references to convert.", nargs='*')
