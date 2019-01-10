@@ -79,7 +79,7 @@ class Importer:
       return tagobj
 
     oldname = tagobj.name
-    tagobj.name = self.tag_prefix + '-' + tagobj.name
+    tagobj.name = self.tag_prefix + tagobj.name
 
     print 'Rewriting tag %s to %s' % (oldname, tagobj.name)
 
