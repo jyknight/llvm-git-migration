@@ -33,7 +33,13 @@
 #   git fetch --all
 #
 # Then, run this script:
-#   zip-downstream-fork.py refs/remotes/umbrella --revmap-in=$file
+#   zip-downstream-fork.py refs/remotes/umbrella --revmap-in=$file \
+#                          --subdir=<dir>
+#
+# --subdir specified where to rewrite trees (directories and files)
+# that are not part of a submodule.  Things such as top-level READMEs,
+# build scripts, etc. will appear under <dir>.  This is to avoid
+# possible conflicts with top-level entries in the upstream monorepo.
 #
 # With --revmap-out=$outfile the tool will dump a map from original
 # umbrella commit hash to rewritten umbrella commit hash.
@@ -51,18 +57,15 @@
 #   accept a revlist to process directly, bypassing its invocation of
 #   git rev-list within do_filter.
 #
+# - The script assumes submodules for upstream projects in the
+#   umbrella appear in the same places they do in the monorepo
+#   (i.e. an llvm submodule exists at "llvm" in the umbrella, a clang
+#   submodule exists at "clang" in the umbrella, and so on).
+#
 # - Submodule removal is not handled at all.  The subproject will
 #   continue to exist though no updates to it will be made.  This
 #   could by added by judicial use of fast_filter_branch.py's
 #   TreeEntry.remove_entry.
-#
-# - The script assumes that any commits in the umbrella history that
-#   do not update submodules should be discarded.  It is not clear
-#   what should happen if such a commit happens to touch files with
-#   the same name as those in the monorepo (README files are typical).
-#   Adding support to keep these commits should be straightforward,
-#   but because decisions are likely to vary based on particular
-#   setups, we just punt for now.
 #
 # - Subproject tags are not rewritten.  Because the subproject commits
 #   themselves are not rewritten, any downstream tags pointing to them
@@ -118,7 +121,7 @@ class Zipper:
   """Destructively zip a submodule umbrella repository."""
   def __init__(self, new_upstream_prefix, revmap_in_file, revmap_out_file,
                reflist, debug, abort_bad_submodule, no_rewrite_commit_msg,
-               skipped_pick_first):
+               subdir):
     if not new_upstream_prefix.endswith('/'):
       new_upstream_prefix = new_upstream_prefix + '/'
 
@@ -134,7 +137,7 @@ class Zipper:
     self.prev_submodules         = []
     self.abort_bad_submodule     = abort_bad_submodule
     self.no_rewrite_commit_msg   = no_rewrite_commit_msg
-    self.skipped_pick_first      = skipped_pick_first
+    self.subdir                  = subdir
 
   def debug(self, msg):
     if self.dbg:
@@ -163,10 +166,10 @@ class Zipper:
     # Save the set of git hashes for the new monorepo.
     self.new_upstream_hashes = set(subprocess.check_output(['git', 'rev-list'] + refs).split('\n')[:-1])
 
-  def find_submodules_in_entry(self, githash, tree):
+  def find_submodules_in_entry(self, githash, tree, path):
     """Figure out which submodules/submodules commit an existing tree references.
 
-    Returns [(submodule name, hash)], or [] if there are no submodule
+    Returns [([submodule pathsegs], hash)], or [] if there are no submodule
     updates to submodules we care about.  Recurses on subentries.
     """
 
@@ -193,67 +196,56 @@ class Zipper:
             raise Exception('No commit %s for submodule %s in commit %s' % (e.githash, name, githash))
           continue
 
-        submodule_entry = (name, e.githash)
+        submodule_path = list(path)
+        submodule_path.append(name)
+        submodule_entry = (submodule_path, e.githash)
         submodules.append(submodule_entry)
 
       elif e.mode == '40000':
-        submodules.extend(self.find_submodules_in_entry(githash, e))
+        subpath = list(path)
+        subpath.append(name)
+        submodules.extend(self.find_submodules_in_entry(githash, e, subpath))
 
     return submodules
 
   def find_submodules(self, commit, githash):
     """Figure out which submodules/submodule commits an existing commit references.
 
-    Returns [(submodule name, hash)], or [] if there are no submodule
+    Returns [([submodule pathsegs], hash)], or [] if there are no submodule
     updates to submodules we care about.  Recurses the tree structure.
     """
 
-    return self.find_submodules_in_entry(githash, commit.get_tree_entry())
+    return self.find_submodules_in_entry(githash, commit.get_tree_entry(), [])
 
-  def prompt_for_parent(self, commit, githash):
-    # We have a commit that we've decided we want to skip.  We need to
-    # return a different commit to take its place.  If the commit has
-    # a single parent we just return that but if it has multiple
-    # parents we need to ask the user what to do.
-    parents = commit.parents
-    subject = commit.msg.splitlines()[0]
+  def clear_tree(self, tree):
+    """Remove all entries from tree"""
+    subentries = tree.get_subentries(self.fm).items()
+    for name, entry in subentries:
+      tree = tree.remove_entry(self.fm, name)
 
-    print 'Multiple parents for skipped commit %s %s' % (githash, subject)
-    print 'Pick a parent to use as a substitute:'
+    return tree
 
-    for i, parent in enumerate(parents):
-      parent_commit = self.fm.get_commit(parent)
-      parent_subject = parent_commit.msg.splitlines()[0]
+  def rewrite_tree(self, tree, subdir):
+    """Move the top-level entries under subdir"""
 
-      print '[%d] %s %s' % (i, parent, parent_subject)
+    if tree.mode == '40000':
+      entries = tree.get_subentries(self.fm).copy()
 
-    sys.stdout.flush
+      subtree = fast_filter_branch.TreeEntry('40000', sub_entries = entries)
 
-    done = False
-    while not done:
-      answer = input('Selection: ')
-      done = True
-      try:
-        parents[answer]
-      except:
-        done = False
+      subtree.write_subentries(self.fm)
 
-    return answer
+      tree = tree.add_entry(self.fm, subdir, subtree)
 
-  def substitute_commit(self, commit, githash):
-    parent_choice = 0
-    if len(commit.parents) != 1:
-      if self.skipped_pick_first:
-        subject = commit.msg.splitlines()[0]
-        first_parent = commit.parents[0]
-        first_parent_commit = self.fm.get_commit(first_parent)
-        first_parent_subject = first_parent_commit.msg.splitlines()[0]
-        print 'WARNING: Multiple parents for skipped commit (%s %s), picking first (%s %s)' % (githash, subject, first_parent, first_parent_subject)
-      else:
-        parent_choice = self.prompt_for_parent(commit, githash)
+      for name, entry in tree.get_subentries(self.fm).items():
+        if name is not subdir:
+          tree = tree.remove_entry(self.fm, name)
 
-    # Map this to the parent commit to skip it.
-    return commit.parents[parent_choice]
+      self.debug('NEWTREE:\n')
+      for name, entry in tree.get_subentries(self.fm).items():
+        self.debug('%s %s\n' % (name, str(entry)))
+
+    return tree
 
   def zip_filter(self, fm, githash, commit, oldparents):
     """Rewrite an umbrella branch with interleaved commits
@@ -283,31 +275,36 @@ class Zipper:
     submodules = self.find_submodules(commit, githash)
 
     if not submodules:
-      self.debug('No submodules')
-      return self.substitute_commit(commit, githash)
+      # No submodules imported yet.
+      self.debug('No submodules yet - rewrite\n')
+      newtree = self.rewrite_tree(commit.get_tree_entry(), self.subdir)
+      newtree.write_subentries(self.fm)
+      commit.treehash = newtree.githash
+      return commit
 
-    # self.debug('Previous submodules: [%s]' % ', '.join(map(str, self.prev_submodules)))
-    # self.debug('Current submodules:  [%s]' % ', '.join(map(str, submodules)))
+    # The content of the commit should be the combination of the
+    # content from the submodules.
+    newtree = commit.get_tree_entry()
 
-    if self.prev_submodules == submodules:
-      # This is a commit that modified some file in the umbrella and
-      # didn't update any submodules..  Assume we don't want it.
-      self.debug('No submodule updates')
-      return self.substitute_commit(commit, githash)
+    # First, remove all submodule updates.  We don't want to rewrite
+    # these under subdir.
+    for pathsegs, oldhash in submodules:
+      newtree = newtree.remove_path(self.fm, pathsegs)
 
     prev_submodules_map = {}
 
     if not self.no_rewrite_commit_msg:
       # Track the old hashes for submodules so we know which
       # submodules this commit updated below.
-      for prev_submodule_name, prev_submodule_hash in self.prev_submodules:
-        prev_submodules_map[prev_submodule_name] = prev_submodule_hash
+      for prev_submodule_pathsegs, prev_submodule_hash in self.prev_submodules:
+        prev_submodules_map['/'.join(prev_submodule_pathsegs)] = prev_submodule_hash
 
     self.prev_submodules = submodules
 
-    # The content of the commit should be the combination of the
-    # content from the submodules.
-    newtree = None
+    # Rewrite the non-submodule-update portions of the tree under
+    # subdir.
+    self.debug('Rewrite non-submodule entries\n')
+    newtree = self.rewrite_tree(newtree, self.subdir)
 
     upstream_parents = []
     submodule_add_parents = []
@@ -316,29 +313,34 @@ class Zipper:
     if self.no_rewrite_commit_msg:
       new_commit_msg = commit.msg
 
-    for name, oldhash in submodules:
-      self.debug('Found submodule (%s, %s)' % (name, oldhash))
+    # Import trees from commits pointed to by the submodules.  We
+    # assume the trees should be placed in the same paths the
+    # submodules appear.
+    for pathsegs, oldhash in submodules:
+      path='/'.join(pathsegs)
+      self.debug('Found submodule (%s, %s)' % (path, oldhash))
+
+      # Get the hash of the rewritten commit corresponding to the
+      # submodule update.
       newhash = self.revmap.get(oldhash, oldhash)
       newcommit = self.fm.get_commit(newhash)
       self.debug('New hash: %s' % newhash)
 
-      if not newtree:
-        self.debug('First submodule %s' % name)
-        newtree = newcommit.get_tree_entry()
-        submodule_tree = newcommit.get_tree_entry().get_path(self.fm, name.split('/'))
-        if not submodule_tree:
-          raise Exception('Initial found submodule %s not in monorepo' % name)
-      else:
-        self.debug('Next submodule %s' % name)
-        submodule_tree = newcommit.get_tree_entry().get_path(self.fm, name.split('/'))
-        if not submodule_tree:
-          # This submodule doesn't exist in the monorepo, add the
-          # entire contents of the commit's tree.
-          submodule_tree = newcommit.get_tree_entry()
-        newtree = newtree.add_path(self.fm, name.split('/'), submodule_tree)
+      # We assume submodules for upstream projects in the umbrella
+      # appear in the same places they do in the monorepo (i.e. an
+      # llvm submodule exists at "llvm" in the umbrella, a clang
+      # submodule exists at "clang" in the umbrella, and so on).
+      submodule_tree = newcommit.get_tree_entry().get_path(self.fm, pathsegs)
+
+      if not submodule_tree:
+        # This submodule doesn't exist in the monorepo, add the
+        # entire contents of the commit's tree.
+        submodule_tree = newcommit.get_tree_entry()
+
+      newtree = newtree.add_path(self.fm, pathsegs, submodule_tree)
 
       if not self.no_rewrite_commit_msg:
-        if not name in prev_submodules_map or prev_submodules_map[name] != oldhash:
+        if not path in prev_submodules_map or prev_submodules_map[path] != oldhash:
           if not new_commit_msg:
             new_commit_msg = newcommit.msg
           else:
@@ -347,10 +349,10 @@ class Zipper:
       # Rewrite parents.  If this commit added a new submodule, add a
       # parent to the corresponding commit.  If one of the submodule
       # commits merged from upstream, add the upstream commit.
-      if name not in self.added_submodules:
-        self.debug('Merge new submodule %s' % name)
+      if path not in self.added_submodules:
+        self.debug('Merge new submodule %s' % path)
         submodule_add_parents.append(newhash)
-        self.added_submodules.add(name)
+        self.added_submodules.add(path)
 
       for parent in newcommit.parents:
         self.debug('Checking parent %s' % parent)
@@ -359,12 +361,12 @@ class Zipper:
           upstream_parents.append(parent)
           self.merged_upstream_parents.add(parent)
 
+    newtree.write_subentries(fm)
+    commit.treehash = newtree.githash
+
     for name, e in newtree.get_subentries(fm).iteritems():
       self.debug('NEWTREE: %s %s' % (name, str(e)))
 
-    newtree.write_subentries(fm)
-
-    commit.treehash = newtree.githash
     commit.parents.extend(submodule_add_parents)
     commit.parents.extend(upstream_parents)
     commit.msg = new_commit_msg
@@ -446,9 +448,9 @@ Typical usage:
                       help="Abort on bad submodule updates.", action="store_true")
   parser.add_argument("--no-rewrite-commit-msg",
                       help="Don't rewrite the submodule update commit message with the merged commit message.", action="store_true")
-  parser.add_argument("--skipped-pick-first",
-                      help="If a skipped commit has multiple parents, pick the first one as a replacement.", action="store_true")
+  parser.add_argument("--subdir", metavar="DIR",
+                      help="Subdirectory under which to write non-submodule trees")
   args = parser.parse_args()
   Zipper(args.new_repo_prefix, args.revmap_in, args.revmap_out, args.reflist,
          args.debug, args.abort_bad_submodule, args.no_rewrite_commit_msg,
-         args.skipped_pick_first).run()
+         args.subdir).run()
