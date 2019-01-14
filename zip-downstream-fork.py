@@ -44,12 +44,128 @@
 # With --revmap-out=$outfile the tool will dump a map from original
 # umbrella commit hash to rewritten umbrella commit hash.
 #
+# On the rewriting of trees:
+#
+# If a downstream commit merged in an upstream commit, parents for the
+# "inlined" submodule update are rewritten correctly.  The tool takes
+# care to preserve the proper history for upstream monorepo bits that
+# do not participate in the submodule process.  For example, say the
+# umbrella history looks like this:
+#
+#   *   (HEAD -> umbrella/master) Update submodule clang to FOO
+#   |
+#   *   Update submodule llvm to BAR
+#   |
+#   |  *   (HEAD -> llvm/local) Do commit BAR in llvm
+#   |  |
+#   |  |     *   (HEAD -> clang/local) Do commit FOO in clang
+#   |  |     |
+#   *  |     |        Downstream umbrella work
+#   |  |     |
+#     llvm  clang
+#
+# The umbrella history updates submodules from commits in local copies
+# of llvm and clang.  Note that the llvm and clang histories have not
+# yet been rewritten against the monorepo.
+#
+# Let's also say when the local llvm and clang branches are rewritten
+# against the monorepo (by migrate-downstream-fork.py), it looks
+# something like this:
+#
+#   *   (HEAD -> monorepo/master) Do commit XYZZY in lld
+#   |
+#   |  *   (HEAD -> monorepo-llvm/local) Do commit BAR in llvm
+#   |  |
+#   | /
+#   |/
+#   *   Do commit BAZ in compiler-rt
+#   |
+#   |  *   (HEAD -> monorepo-clang/local) Do commit FOO in clang
+#   |  |
+#   | /
+#   |/
+#   *   Do commit QUX in compiler-rt
+#   |
+#
+# The commits from compiler-rt come from upstream (no local work
+# exists for compiler-rt) but commits BAR and BAZ exist in local
+# histories for llvm and compiler-rt which were rewritten against the
+# upstream monorepo (i.e. they are in branches off monorepo/master or
+# some other point).
+#
+# A naive processing of parents would leave us with something like
+# this in the zipped history:
+#
+#   *   (HEAD -> monorepo/master) Do commit XYZZY in lld
+#   |
+#   |  *   (HEAD -> zip/master) Do commit FOO in clang
+#   |  |\
+#   |  * \   Do commit BAR in llvm
+#   | /   |
+#   |/    |
+#   *     |   Do commit BAZ in compiler-rt
+#   |    /
+#   |   /
+#   |  /
+#   | /
+#   |/
+#   *   Do commit QUX in compiler-rt
+#   |
+#
+# Not only is the edge from compiler-rt/QUX to zip/master redundant
+# (it was supposedly merged along with compiler-rt/BAZ), the tree from
+# compiler-rt could be written incorrectly, resulting in
+# compiler-rt/QUX at zip/master rather than the proper
+# compiler-rt/BAZ.  This is because monorepo-clang/FOO incorpates the
+# tree from compiler-rt/QUX
+#
+# The script attempts to get this right by tracking the most recent
+# merge-base from the monorepo along each zipped branch.  If a
+# submodule update brings in an older tree from the monorepo, that
+# tree is discarded in favor of the merge-base.  Otherwise the
+# merge-base is updated to point to the new tree.  This means that the
+# script assumes there is a total topological ordering among upstream
+# commits brought in via submodule updates.  For example, the script
+# will abort if trying to create a history like this:
+#
+#         *  (HEAD -> zip/master)
+#        /|
+#       / |
+#      *  |  (HEAD -> llvm/local)
+#     /   |
+#    /    |
+#   *     |  (HEAD -> monorepo/master
+#   |     |
+#   |     *  (HEAD -> clang/local)
+#   |    /
+#   |   /
+#   |  *  (HEAD -> monorepo/branch1)
+#   | /
+#   |/
+#
+#
+# llvm/local and clang/local are based off divergent branches of the
+# monorepo and there is no total topological order among them.  It is
+# not clear which monorepo tree should be used for other subprojects
+# (compiler-rt, etc.).  In this case the script aborts with an error
+# indicating the commit would create such a merge point.
+#
+# Note that the content appearing in subprojects will always reflect
+# the tree found in the commit pointed to by the corresponding
+# submodule.  This means that some subprojects may appear "older" in
+# the resulting tree.  In the example above, clang/FOO came from a
+# topologically earlier commit than llvm/BAR and the clang sources
+# will be older than that of any other clang commits that may appear
+# between clang/FOO and llvm/BAR.  The script favors preserving
+# submodule updates as they appeared in the umbrella history under the
+# assumption that subprojects were merged from upstream in lockstep.
+#
 # TODO/Limitations:
 #
 # - The script requires a history with submodule updates.  It should
 #   be fairly straightforward to enhance the script to take a revlist
 #   directly, ordering the commits according to the revlist.  Such a
-#   revlist could be generated from an umbrella repository or via
+#   revlist could be generated from an umbrella history or via
 #   site-specific mechanisms.  This would be passed to
 #   fast_filter_branch.py directly, rather than generating a list via
 #   expand_ref_pattern(self.reflist) in Zipper.run as is currently
@@ -62,48 +178,21 @@
 #   (i.e. an llvm submodule exists at "llvm" in the umbrella, a clang
 #   submodule exists at "clang" in the umbrella, and so on).
 #
-# - Submodule removal is not handled at all.  The subproject will
-#   continue to exist though no updates to it will be made.  This
+# - Submodule removal is not handled at all.  A third-party subproject
+#   will continue to exist though no updates to it will be made.  This
 #   could by added by judicial use of fast_filter_branch.py's
-#   TreeEntry.remove_entry.
+#   TreeEntry.remove_entry.  For projects managed by upstream (clang,
+#   llvm, etc.), if a commit doesn't include a submodule (because it
+#   was removed), the subproject tree is taken from the upstream
+#   monorepo tree just as it is for upstream projects not
+#   participating in the umbrella history.
 #
 # - Subproject tags are not rewritten.  Because the subproject commits
-#   themselves are not rewritten, any downstream tags pointing to them
-#   won't be updated to point to the zipped history.  We could provide
-#   this capability if we updated the revmap entry for subproject
-#   commits to point to the corresponding zipped commit during
-#   filtering.
-#
-# - If a downstream commit merged in an upstream commit, parents for
-#   the "inlined" submodule update are rewritten correctly, though the
-#   history can look a bit strange as updates to multiple submodules
-#   can create parents to history that is "already merged."  For
-#   example:
-#
-#   *   (HEAD -> zip/master) Merge commit FOO from clang
-#   |\
-#   * \   Merge commit BAR from llvm
-#   |\ \
-#   | \ \
-#   |  * |    Do commit BAR in llvm
-#   |  |/
-#   |  *      Do commit FOO in clang
-#   |  |
-#   *  |      Downstream llvm work
-#   |  |
-#      Monorepo
-#
-#   There's no real harm in this, it just looks strange.  A possible
-#   enhancement for this script is to collapse submodule updates that
-#   merge from upstream and have the result point to the most recent
-#   upstream commit merged in.  However, this is difficult to do in
-#   general, because subprojects might have been updated from upstream
-#   at very different times and detecting a related set of submodule
-#   updates is not straightforward.  Even a simple heuristic of
-#   "collapse all submodule upstream updates between downstream
-#   commits" won't always work, because it's possible that a
-#   downstream commit was submodule-updated in the middle of someone
-#   else updating all the subprojects from upstream.
+#   themselves are not rewritten (only the commits in the umbrella
+#   history are rewritten), any downstream tags pointing to them won't
+#   be updated to point to the zipped history.  We could provide this
+#   capability if we updated the revmap entry for subproject commits
+#   to point to the corresponding zipped commit during filtering.
 #
 import argparse
 import fast_filter_branch
@@ -138,6 +227,7 @@ class Zipper:
     self.abort_bad_submodule     = abort_bad_submodule
     self.no_rewrite_commit_msg   = no_rewrite_commit_msg
     self.subdir                  = subdir
+    self.umbrella_merge_base     = {}
 
   def debug(self, msg):
     if self.dbg:
@@ -247,6 +337,48 @@ class Zipper:
 
     return tree
 
+  def is_ancestor(self, potential_ancestor, potential_descendent):
+    return subprocess.call(["git", "merge-base", "--is-ancestor",
+                            potential_ancestor, potential_descendent]) == 0
+
+  def list_is_ancestor(self, potential_ancestors, potential_descendent):
+    Result = True
+    for potential_ancestor in potential_ancestors:
+      if not self.is_ancestor(potential_ancestor, potential_descendent):
+        Result = False
+    return Result
+
+  def get_latest_upstream_commit(self, githash, submodules, candidates):
+    """Determine which of candidates has the upstream tree we want."""
+
+    if not candidates:
+      return None
+
+    result, result_path = candidates[0]
+
+    if len(candidates) == 1:
+      return result
+
+    for candidate, path in candidates[1:]:
+      self.debug("%s %s is_ancestor %s %s\n" % (result_path, result, path, candidate))
+      if self.is_ancestor(result, candidate):
+        result, result_path = [candidate, path]  # Candidate is newer
+      elif not self.is_ancestor(candidate, result):
+        # Neither is an ancestor of the other.  This must be a case
+        # where the umbrella repository has updates from two different
+        # upstream branches.  This is highly unusual and probably
+        # something has gone wrong.  Abort for now.
+        errstr = "Commit %s has submodule updates from multiple branches (%s %s)?\n\n" % (githash, path, candidate)
+        for pathsegs, oldhash in submodules:
+          errpath = '/'.join(pathsegs)
+          errstr += "%s %s\n" % (errpath, oldhash)
+
+        raise Exception(errstr)
+
+    self.debug("Using %s %s as merge-base\n" % (result_path, result))
+
+    return result
+
   def zip_filter(self, fm, githash, commit, oldparents):
     """Rewrite an umbrella branch with interleaved commits
 
@@ -271,6 +403,7 @@ class Zipper:
     """
 
     self.debug('--- commit %s' % githash)
+    self.debug('%s\n' % commit.msg)
 
     submodules = self.find_submodules(commit, githash)
 
@@ -283,7 +416,76 @@ class Zipper:
       return commit
 
     # The content of the commit should be the combination of the
-    # content from the submodules.
+    # content from the submodules and elements from the monorepo tree
+    # not updated by submodules.  The tricky part is figuring out
+    # which monorepo tree that should be.
+    #
+    # Start by assuming our upstream tree will be from the previous
+    # umbrella rewrite, if there was one.
+    #
+    umbrella_merge_bases = []  # Hashes of upstream merge-bases from
+                               # umbrella commits.
+
+    for op in oldparents:
+      parent_merge_base = self.umbrella_merge_base[self.fm.get_mark(op)]
+      if parent_merge_base:
+        umbrella_merge_bases.append([parent_merge_base, None])
+
+    prev_submodules_map = {}
+
+    # Track the old hashes for submodules so we know which
+    # submodules this commit updated below.
+    for prev_submodule_pathsegs, prev_submodule_hash in self.prev_submodules:
+      prev_submodules_map['/'.join(prev_submodule_pathsegs)] = prev_submodule_hash
+
+    self.prev_submodules = submodules
+
+    new_commit_msg = ''
+    if self.no_rewrite_commit_msg:
+      new_commit_msg = commit.msg
+
+    submodule_hash = {}
+
+    # For each submodule, get the corresponding monorepo-rewritten
+    # commit.  Figure out which monorepo tree to use as the base for
+    # the new zipped commit.  For each submodule commit, examine its
+    # parents.  If it more than one parent, the other parents may be
+    # from the upstream monorepo, which would represent a merge from
+    # upstream history and a potential new merge-base for the current
+    # zip history.
+    #
+    # Given all of the parents of all of the submodule commits,
+    # determine which one has the most recent content from upstream
+    # and use its tree as the base for the new commit.
+    #
+    commits_to_check = umbrella_merge_bases  # Hashes of candidate
+                                             # commits for the base
+                                             # upstream tree.
+    for pathsegs, oldhash in submodules:
+      path='/'.join(pathsegs)
+      self.debug('Found submodule (%s, %s)' % (path, oldhash))
+
+      # Get the hash of the monorepo-rewritten commit corresponding to
+      # the submodule update.
+      newhash = self.revmap.get(oldhash, oldhash)
+      self.debug('New hash: %s' % newhash)
+      submodule_hash[path] = newhash
+
+      newcommit = self.fm.get_commit(newhash)
+      for parent in newcommit.parents:
+        parent_hash = self.fm.get_mark(parent)
+        if parent_hash in self.new_upstream_hashes:
+          # This submodule has an upstream parent.
+          self.debug("Upstream parent %s\n" % parent_hash)
+          commits_to_check.append([parent_hash, path])
+
+    umbrella_merge_base_hash = self.get_latest_upstream_commit(githash,
+                                                               submodules,
+                                                               commits_to_check)
+
+    # Record our choice so children can find it.
+    self.umbrella_merge_base[githash] = umbrella_merge_base_hash
+
     newtree = commit.get_tree_entry()
 
     # First, remove all submodule updates.  We don't want to rewrite
@@ -291,40 +493,31 @@ class Zipper:
     for pathsegs, oldhash in submodules:
       newtree = newtree.remove_path(self.fm, pathsegs)
 
-    prev_submodules_map = {}
-
-    if not self.no_rewrite_commit_msg:
-      # Track the old hashes for submodules so we know which
-      # submodules this commit updated below.
-      for prev_submodule_pathsegs, prev_submodule_hash in self.prev_submodules:
-        prev_submodules_map['/'.join(prev_submodule_pathsegs)] = prev_submodule_hash
-
-    self.prev_submodules = submodules
-
     # Rewrite the non-submodule-update portions of the tree under
     # subdir.
     self.debug('Rewrite non-submodule entries\n')
     newtree = self.rewrite_tree(newtree, self.subdir)
 
-    upstream_parents = []
-    submodule_add_parents = []
+    # Write the umbrella merge-base into the tree.
+    if umbrella_merge_base_hash:
+      umbrella_merge_base_commit = self.fm.get_commit(umbrella_merge_base_hash)
 
-    new_commit_msg = ''
-    if self.no_rewrite_commit_msg:
-      new_commit_msg = commit.msg
+      umbrella_merge_base_tree = umbrella_merge_base_commit.get_tree_entry()
+      for name, entry in umbrella_merge_base_tree.get_subentries(self.fm).items():
+        newtree.add_entry(self.fm, name, entry)
 
     # Import trees from commits pointed to by the submodules.  We
     # assume the trees should be placed in the same paths the
     # submodules appear.
+    submodule_add_parents = []   # Parents due to a "submodule add" operation
+    upstream_parents = []        # Parents due to merges from upstream
     for pathsegs, oldhash in submodules:
       path='/'.join(pathsegs)
-      self.debug('Found submodule (%s, %s)' % (path, oldhash))
 
       # Get the hash of the rewritten commit corresponding to the
       # submodule update.
-      newhash = self.revmap.get(oldhash, oldhash)
+      newhash = submodule_hash[path]
       newcommit = self.fm.get_commit(newhash)
-      self.debug('New hash: %s' % newhash)
 
       # We assume submodules for upstream projects in the umbrella
       # appear in the same places they do in the monorepo (i.e. an
@@ -339,27 +532,36 @@ class Zipper:
 
       newtree = newtree.add_path(self.fm, pathsegs, submodule_tree)
 
-      if not self.no_rewrite_commit_msg:
-        if not path in prev_submodules_map or prev_submodules_map[path] != oldhash:
+      prev_submodule_hash = None
+      if path in prev_submodules_map:
+        prev_submodule_hash = prev_submodules_map[path]
+
+      if prev_submodule_hash != oldhash:
+        if prev_submodule_hash:
+          self.debug("Updated %s to %s (new %s)\n" % (path, oldhash, newhash))
+        if not self.no_rewrite_commit_msg:
           if not new_commit_msg:
             new_commit_msg = newcommit.msg
           else:
             new_commit_msg += '\n' + newcommit.msg
 
       # Rewrite parents.  If this commit added a new submodule, add a
-      # parent to the corresponding commit.  If one of the submodule
-      # commits merged from upstream, add the upstream commit.
+      # parent to the corresponding commit.
       if path not in self.added_submodules:
-        self.debug('Merge new submodule %s' % path)
+        self.debug('Add new submodule %s' % path)
         submodule_add_parents.append(newhash)
         self.added_submodules.add(path)
 
-      for parent in newcommit.parents:
-        self.debug('Checking parent %s' % parent)
-        if parent in self.new_upstream_hashes and not parent in self.merged_upstream_parents:
-          self.debug('Merge upstream commit %s' % parent)
-          upstream_parents.append(parent)
-          self.merged_upstream_parents.add(parent)
+    # Add umbrella_merge_base as a parent if it's a descendent of all
+    # previously merged upstream commits.
+    if umbrella_merge_base_hash in self.new_upstream_hashes:
+      if umbrella_merge_base_hash not in self.merged_upstream_parents:
+        if self.list_is_ancestor(self.merged_upstream_parents, umbrella_merge_base_hash):
+          # The new merge-base is newer than all previously-merged
+          # upstream parents, so add an edge to it.
+          self.debug('Add upstream merge parent %s' % umbrella_merge_base_hash)
+          upstream_parents.append(umbrella_merge_base_hash)
+          self.merged_upstream_parents.add(umbrella_merge_base_hash)
 
     newtree.write_subentries(fm)
     commit.treehash = newtree.githash
