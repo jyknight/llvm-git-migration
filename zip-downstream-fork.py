@@ -17,7 +17,7 @@
 # Usage:
 #
 # First, prepare a repository by following the instructions in
-# migrate-downstream-fork.py.  Pass --revmap-out=$file to create a
+# migrate-downstream-fork.py.  Pass --revmap-out=<file> to create a
 # mapping from old downstream commits to new downstream commits.
 #
 # Then add umbrella history:
@@ -33,15 +33,58 @@
 #   git fetch --all
 #
 # Then, run this script:
-#   zip-downstream-fork.py refs/remotes/umbrella --revmap-in=$file \
-#                          --subdir=<dir>
+#   zip-downstream-fork.py refs/remotes/umbrella --revmap-in=<file> \
+#                          --subdir=<dir> [--submodule-map=<file>] \
+#                          [--revmap-out=<file>]
 #
 # --subdir specified where to rewrite trees (directories and files)
 # that are not part of a submodule.  Things such as top-level READMEs,
 # build scripts, etc. will appear under <dir>.  This is to avoid
 # possible conflicts with top-level entries in the upstream monorepo.
 #
-# With --revmap-out=$outfile the tool will dump a map from original
+# The option --submodule-map=<file> is useful if your submodule layout
+# is different from the monorepo layout.  By default the tool assumes
+# project submodules exist at the top level of the umbrella history
+# (e.g. in the same relative path as in the monorepo).  Use
+# --submodule-map if your layout differs.  The map file should contain
+# a mapping from submodule path to monorepo path, one mapping per
+# line.  If a submodule path doesn't exist in the map, it is assumed
+# to map to the same path in the monorepo.
+#
+# For example, if your layout looks like this:
+#
+# <root>
+#   local-sources
+#   upstream-sources
+#     clang
+#     compiler-rt
+#     llvm
+#
+# then your submodule map file (submodule-map.txt) would look like
+# this:
+#
+# upstream-sources/clang clang
+# upstream-sources/compiler-rt compiler-rt
+# upstream-sources/llvm llvm
+#
+# and you would invoke the tools as:
+#
+#   zip-downstream-fork.py refs/remotes/umbrella --revmap-in=$file \
+#                          --subdir=<dir> \
+#                          --submodule-map=submodule-map.txt
+#
+# Note that the mapping simply maps matching umbrella path names to
+# monorepo paths.  There is no requirement that the umbrella path end
+# with the same name as the monorepo path.  If your clang is imported
+# under fizzbin, simply tell the mapper that:
+#
+# fizzbin clang
+#
+# The mapper can also move third-party submodules to new places:
+#
+# my-top-level-tool third-party/my-tool
+#
+# With --revmap-out=<file> the tool will dump a map from original
 # umbrella commit hash to rewritten umbrella commit hash.
 #
 # On the rewriting of trees:
@@ -142,7 +185,8 @@
 #   |  *  (HEAD -> monorepo/branch1)
 #   | /
 #   |/
-#
+#   *  XYZ work
+#   |
 #
 # llvm/local and clang/local are based off divergent branches of the
 # monorepo and there is no total topological order among them.  It is
@@ -162,6 +206,11 @@
 #
 # TODO/Limitations:
 #
+# - Nested submodules aren't handled yet.  If one of your submodules
+#   contains a nested submodule (e.g. clang in llvm/tools/clang where
+#   llvm is itself a submodule containing submodule clang), the tool
+#   will not find the clang submodule.
+#
 # - The script requires a history with submodule updates.  It should
 #   be fairly straightforward to enhance the script to take a revlist
 #   directly, ordering the commits according to the revlist.  Such a
@@ -172,11 +221,6 @@
 #   done.  Changes would need to be made to fast_filter_branch.py to
 #   accept a revlist to process directly, bypassing its invocation of
 #   git rev-list within do_filter.
-#
-# - The script assumes submodules for upstream projects in the
-#   umbrella appear in the same places they do in the monorepo
-#   (i.e. an llvm submodule exists at "llvm" in the umbrella, a clang
-#   submodule exists at "clang" in the umbrella, and so on).
 #
 # - Submodule removal is not handled at all.  A third-party subproject
 #   will continue to exist though no updates to it will be made.  This
@@ -210,7 +254,7 @@ class Zipper:
   """Destructively zip a submodule umbrella repository."""
   def __init__(self, new_upstream_prefix, revmap_in_file, revmap_out_file,
                reflist, debug, abort_bad_submodule, no_rewrite_commit_msg,
-               subdir):
+               subdir, submodule_map_file):
     if not new_upstream_prefix.endswith('/'):
       new_upstream_prefix = new_upstream_prefix + '/'
 
@@ -228,6 +272,28 @@ class Zipper:
     self.no_rewrite_commit_msg   = no_rewrite_commit_msg
     self.subdir                  = subdir
     self.umbrella_merge_base     = {}
+
+    if submodule_map_file:
+      with open(submodule_map_file) as f:
+        self.submodule_map = dict(line.split() for line in f)
+    else:
+      subprojects = ['clang',
+                     'clang-tools-extra',
+                     'compiler-rt',
+                     'debuginfo-tests',
+                     'libclc',
+                     'libcxx',
+                     'libcxxabi',
+                     'libunwind',
+                     'lld',
+                     'lldb',
+                     'llgo',
+                     'llvm',
+                     'openmp',
+                     'parallel-libs',
+                     'polly',
+                     'pstl']
+      self.submodule_map = dict((s, s) for s in subprojects)
 
   def debug(self, msg):
     if self.dbg:
@@ -520,23 +586,30 @@ class Zipper:
     for pathsegs, oldhash in submodules:
       path='/'.join(pathsegs)
 
-      # Get the hash of the rewritten commit corresponding to the
-      # submodule update.
+      # Get the hash of the monorepo-rewritten commit corresponding to
+      # the submodule update.
       newhash = submodule_hash[path]
       newcommit = self.fm.get_commit(newhash)
 
-      # We assume submodules for upstream projects in the umbrella
-      # appear in the same places they do in the monorepo (i.e. an
-      # llvm submodule exists at "llvm" in the umbrella, a clang
-      # submodule exists at "clang" in the umbrella, and so on).
-      submodule_tree = newcommit.get_tree_entry().get_path(self.fm, pathsegs)
+      # Map the path in the umbrella history to the path in the
+      # monorepo.
+      upstream_path = self.submodule_map.get(path)
+      if not upstream_path:
+        upstream_path = path
+      upstream_segs = upstream_path.split('/')
+
+      submodule_tree = newcommit.get_tree_entry().get_path(self.fm,
+                                                           upstream_segs)
 
       if not submodule_tree:
         # This submodule doesn't exist in the monorepo, add the
         # entire contents of the commit's tree.
         submodule_tree = newcommit.get_tree_entry()
 
-      newtree = newtree.add_path(self.fm, pathsegs, submodule_tree)
+      # Update the tree for the subproject from the commit referenced
+      # by the submodule update, overwriting any existing tree for the
+      # subproject.
+      newtree = newtree.add_path(self.fm, upstream_segs, submodule_tree)
 
       prev_submodule_hash = None
       if path in prev_submodules_map:
@@ -658,7 +731,9 @@ Typical usage:
                       help="Don't rewrite the submodule update commit message with the merged commit message.", action="store_true")
   parser.add_argument("--subdir", metavar="DIR",
                       help="Subdirectory under which to write non-submodule trees")
+  parser.add_argument("--submodule-map", metavar="FILE",
+                      help="File containing a map from submodule path to monorepo path")
   args = parser.parse_args()
   Zipper(args.new_repo_prefix, args.revmap_in, args.revmap_out, args.reflist,
          args.debug, args.abort_bad_submodule, args.no_rewrite_commit_msg,
-         args.subdir).run()
+         args.subdir, args.submodule_map).run()
