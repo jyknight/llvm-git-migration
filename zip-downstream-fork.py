@@ -325,8 +325,11 @@ class Zipper:
   def find_submodules_in_entry(self, githash, tree, path):
     """Figure out which submodules/submodules commit an existing tree references.
 
-    Returns [([submodule pathsegs], hash)], or [] if there are no submodule
-    updates to submodules we care about.  Recurses on subentries.
+    Returns [([submodule pathsegs], commit_hash)], or [] if there are
+    no submodule updates to submodules we care about.  commit_hash is
+    a reference to the commit pointed to by the submodule gitlink.
+    Recurses on subentries and submodules.
+
     """
 
     subentries = tree.get_subentries(self.fm)
@@ -351,11 +354,16 @@ class Zipper:
           if self.abort_bad_submodule:
             raise Exception('No commit %s for submodule %s in commit %s' % (e.githash, name, githash))
           continue
-
-        submodule_path = list(path)
-        submodule_path.append(name)
-        submodule_entry = (submodule_path, e.githash)
-        submodules.append(submodule_entry)
+        else:
+          # Recurse on the submodule to see if there are other
+          # submodules referenced by it.
+          submodule_path = list(path)
+          submodule_path.append(name)
+          submodule_entry = (submodule_path, e.githash)
+          submodules.append(submodule_entry)
+          submodules.extend(self.find_submodules_in_entry(e.githash,
+                                                          commit.get_tree_entry(),
+                                                          submodule_path))
 
       elif e.mode == '40000':
         subpath = list(path)
@@ -384,6 +392,8 @@ class Zipper:
   def rewrite_tree(self, tree, subdir):
     """Move the top-level entries under subdir"""
 
+    pathsegs = subdir.split('/')
+
     if tree.mode == '40000':
       entries = tree.get_subentries(self.fm).copy()
 
@@ -391,7 +401,7 @@ class Zipper:
 
       subtree.write_subentries(self.fm)
 
-      tree = tree.add_entry(self.fm, subdir, subtree)
+      tree = tree.add_path(self.fm, pathsegs, subtree)
 
       for name, entry in tree.get_subentries(self.fm).items():
         if name is not subdir:
@@ -444,6 +454,15 @@ class Zipper:
     self.debug("Using %s %s as merge-base\n" % (result_path, result))
 
     return result
+
+  def remove_submodules(self, tree, submodule_paths, parent_path):
+    for pathsegs in submodule_paths:
+      entry = tree.get_path(self.fm, pathsegs)
+      if entry and entry.mode == '160000':
+        self.debug('Removing submodule %s from %s' % ('/'.join(pathsegs),
+                                                      parent_path))
+        tree = tree.remove_path(self.fm, pathsegs)
+    return tree
 
   def zip_filter(self, fm, githash, commit, oldparents):
     """Rewrite an umbrella branch with interleaved commits
@@ -562,8 +581,7 @@ class Zipper:
 
     # First, remove all submodule updates.  We don't want to rewrite
     # these under subdir.
-    for pathsegs, oldhash in submodules:
-      newtree = newtree.remove_path(self.fm, pathsegs)
+    newtree = self.remove_submodules(newtree, (x[0] for x in submodules), '.')
 
     # Rewrite the non-submodule-update portions of the tree under
     # subdir.
@@ -605,6 +623,16 @@ class Zipper:
         # This submodule doesn't exist in the monorepo, add the
         # entire contents of the commit's tree.
         submodule_tree = newcommit.get_tree_entry()
+
+      # Remove submodules from this submodule.  Be sure to remove
+      # upstrem_segs from the beginning of submodule paths, since that
+      # path prefix is what got us to the submodule in the first
+      # place.
+      subpaths = ('/'.join(x[0]) for x in submodules)
+      prefix = path + '/'
+      subpaths = (x[x.startswith(prefix) and len(prefix):] for x in subpaths)
+      subpaths = (x.split('/') for x in subpaths)
+      submodule_tree = self.remove_submodules(submodule_tree, subpaths, path)
 
       # Update the tree for the subproject from the commit referenced
       # by the submodule update, overwriting any existing tree for the
