@@ -254,7 +254,7 @@ class Zipper:
   """Destructively zip a submodule umbrella repository."""
   def __init__(self, new_upstream_prefix, revmap_in_file, revmap_out_file,
                reflist, debug, abort_bad_submodule, no_rewrite_commit_msg,
-               subdir, submodule_map_file):
+               subdir, submodule_map_file, copy_tag_prefix):
     if not new_upstream_prefix.endswith('/'):
       new_upstream_prefix = new_upstream_prefix + '/'
 
@@ -272,6 +272,8 @@ class Zipper:
     self.no_rewrite_commit_msg   = no_rewrite_commit_msg
     self.subdir                  = subdir
     self.umbrella_merge_base     = {}
+    self.submodule_revmap        = {}
+    self.tag_prefix              = copy_tag_prefix
 
     if submodule_map_file:
       with open(submodule_map_file) as f:
@@ -464,6 +466,16 @@ class Zipper:
         tree = tree.remove_path(self.fm, pathsegs)
     return tree
 
+  def map_for_tags(self, newhash, updated_submodules):
+    """Map submodule update hashes to newhash so tags know where to point"""
+    # Map the submodule commit to the new zipped commit so we
+    # can update tags.
+    for sub in updated_submodules:
+      updated_hash = self.fm.get_mark(newhash)
+      self.debug('Mapping submodule %s to %s' % (sub, updated_hash))
+      self.submodule_revmap.update({sub: updated_hash})
+      return None
+
   def zip_filter(self, fm, githash, commit, oldparents):
     """Rewrite an umbrella branch with interleaved commits
 
@@ -491,7 +503,6 @@ class Zipper:
     self.debug('%s\n' % commit.msg)
 
     submodules = self.find_submodules(commit, githash)
-
     if not submodules:
       # No submodules imported yet.
       self.debug('No submodules yet - rewrite\n')
@@ -599,8 +610,12 @@ class Zipper:
     # Import trees from commits pointed to by the submodules.  We
     # assume the trees should be placed in the same paths the
     # submodules appear.
-    submodule_add_parents = []   # Parents due to a "submodule add" operation
-    upstream_parents = []        # Parents due to merges from upstream
+    submodule_add_parents = []    # Parents due to a "submodule add"
+                                  # operation
+    upstream_parents = []         # Parents due to merges from
+                                  # upstream
+    updated_submodule_hashes = [] # Rewritten commit hash of updated
+                                  # submodules
     for pathsegs, oldhash in submodules:
       path='/'.join(pathsegs)
 
@@ -646,6 +661,8 @@ class Zipper:
       if prev_submodule_hash != oldhash:
         if prev_submodule_hash:
           self.debug("Updated %s to %s (new %s)\n" % (path, oldhash, newhash))
+          updated_submodule_hashes.append(newhash)
+
         if not self.no_rewrite_commit_msg:
           if not new_commit_msg:
             new_commit_msg = newcommit.msg
@@ -680,7 +697,26 @@ class Zipper:
     commit.parents.extend(upstream_parents)
     commit.msg = new_commit_msg
 
-    return commit
+    return (commit,
+            lambda newhash,updated_submodules = updated_submodule_hashes:
+            self.map_for_tags(newhash, updated_submodules))
+
+  def tag_filter(self, fm, tagobj):
+    """Update tags in submodule histories to point to new umbrella commits."""
+    newhash = self.submodule_revmap.get(tagobj.object_hash)
+    if newhash:
+      if self.tag_prefix:
+        newtag = fast_filter_branch.Tag(newhash, tagobj.object_type,
+                                        self.tag_prefix + tagobj.name,
+                                        tagobj.tagger, tagobj.tagger_date,
+                                        tagobj.msg)
+        fm.write_tag(newtag)
+      else:
+        self.debug('Updating tag %s pointing to %s to point to %s' %
+                   (tagobj.name, tagobj.object_hash, newhash))
+        tagobj.object_hash = newhash
+
+    return tagobj
 
   def run(self):
     if not self.revmap_in_file:
@@ -702,10 +738,19 @@ class Zipper:
     print "Done."
 
     print "Zipping commits..."
+    # Note that thil will not update any tags in the histories pointed
+    # to by submodulees, since we don't ever rewrite those commits.
+    # The call to update_refs below updates those tags.
     fast_filter_branch.do_filter(commit_filter=self.zip_filter,
                                  filter_manager=self.fm,
                                  revmap_filename=self.revmap_out_file,
                                  reflist=expand_ref_pattern(self.reflist))
+
+    print "Updating tags..."
+    fast_filter_branch.update_refs(self.fm, ['refs/tags'],
+                                   self.submodule_revmap, None, self.tag_filter,
+                                   None)
+
     self.fm.close()
     print "Done -- refs updated in-place."
 
@@ -761,7 +806,9 @@ Typical usage:
                       help="Subdirectory under which to write non-submodule trees")
   parser.add_argument("--submodule-map", metavar="FILE",
                       help="File containing a map from submodule path to monorepo path")
+  parser.add_argument("--copy-tag-prefix", metavar="PREFIX", default=None,
+                      help="Copy tags and prepend with PREFIX rather than rewriting tags")
   args = parser.parse_args()
   Zipper(args.new_repo_prefix, args.revmap_in, args.revmap_out, args.reflist,
          args.debug, args.abort_bad_submodule, args.no_rewrite_commit_msg,
-         args.subdir, args.submodule_map).run()
+         args.subdir, args.submodule_map, args.copy_tag_prefix).run()
