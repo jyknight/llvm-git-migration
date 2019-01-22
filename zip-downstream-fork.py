@@ -254,8 +254,7 @@ class Zipper:
   """Destructively zip a submodule umbrella repository."""
   def __init__(self, new_upstream_prefix, revmap_in_file, revmap_out_file,
                reflist, debug, abort_bad_submodule, no_rewrite_commit_msg,
-               subdir, submodule_map_file, copy_tag_prefix,
-               old_upstream_prefix):
+               subdir, submodule_map_file, update_tags, old_upstream_prefix):
     if not new_upstream_prefix.endswith('/'):
       new_upstream_prefix = new_upstream_prefix + '/'
 
@@ -279,7 +278,7 @@ class Zipper:
     self.umbrella_merge_base     = {}
     self.submodule_revmap        = {}
     self.umbrella_revmap         = {}
-    self.tag_prefix              = copy_tag_prefix
+    self.update_tags             = update_tags
 
     if submodule_map_file:
       with open(submodule_map_file) as f:
@@ -837,23 +836,6 @@ class Zipper:
             lambda newhash,updated_submodules = updated_submodule_hashes, oldhash = githash:
             self.map_commits(newhash, oldhash, updated_submodules))
 
-  def tag_filter(self, fm, tagobj):
-    """Update tags in submodule histories to point to new umbrella commits."""
-    newhash = self.submodule_revmap.get(tagobj.object_hash)
-    if newhash:
-      if self.tag_prefix:
-        newtag = fast_filter_branch.Tag(newhash, tagobj.object_type,
-                                        self.tag_prefix + tagobj.name,
-                                        tagobj.tagger, tagobj.tagger_date,
-                                        tagobj.msg)
-        fm.write_tag(newtag)
-      else:
-        self.debug('Updating tag %s pointing to %s to point to %s' %
-                   (tagobj.name, tagobj.object_hash, newhash))
-        tagobj.object_hash = newhash
-
-    return tagobj
-
   def run(self):
     if not self.revmap_in_file:
       raise Exception("No revmap specified, use --revmap-in")
@@ -882,10 +864,10 @@ class Zipper:
                                  revmap_filename=self.revmap_out_file,
                                  reflist=expand_ref_pattern(self.reflist))
 
-    print "Updating tags..."
-    fast_filter_branch.update_refs(self.fm, ['refs/tags'],
-                                   self.submodule_revmap, None, self.tag_filter,
-                                   None)
+    if self.update_tags:
+      print "Updating tags..."
+      fast_filter_branch.update_refs(self.fm, ['refs/tags'],
+                                     self.submodule_revmap, None, None, None)
 
     self.fm.close()
     print "Done -- refs updated in-place."
@@ -944,10 +926,10 @@ Typical usage:
                       help="Subdirectory under which to write non-submodule trees")
   parser.add_argument("--submodule-map", metavar="FILE",
                       help="File containing a map from submodule path to monorepo path")
-  parser.add_argument("--copy-tag-prefix", metavar="PREFIX", default=None,
-                      help="Copy tags and prepend with PREFIX rather than rewriting tags")
+  parser.add_argument("--update-tags", action="store_true",
+                      help="Update tags after filtering")
   args = parser.parse_args()
   Zipper(args.new_repo_prefix, args.revmap_in, args.revmap_out, args.reflist,
          args.debug, args.abort_bad_submodule, args.no_rewrite_commit_msg,
-         args.subdir, args.submodule_map, args.copy_tag_prefix,
+         args.subdir, args.submodule_map, args.update_tags,
          args.old_repo_prefix).run()
