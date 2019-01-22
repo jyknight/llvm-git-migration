@@ -261,27 +261,26 @@ class Zipper:
     if not old_upstream_prefix.endswith('/'):
       old_upstream_prefix = old_upstream_prefix + '/'
 
-    self.new_upstream_prefix     = new_upstream_prefix
-    self.old_upstream_prefix     = old_upstream_prefix
-    self.revmap_in_file          = revmap_in_file
-    self.revmap_out_file         = revmap_out_file
-    self.reflist                 = reflist
-    self.new_upstream_hashes     = set()
-    self.added_submodules        = set()
-    self.merged_upstream_parents = set()
-    self.revap                   = {}
-    self.dbg                     = debug
-    self.prev_submodules         = []
-    self.abort_bad_submodule     = abort_bad_submodule
-    self.no_rewrite_commit_msg   = no_rewrite_commit_msg
-    self.subdir                  = subdir
-    self.umbrella_merge_base     = {}
-    self.submodule_revmap        = {}
-    self.submodule_old_revmap    = {}
-    self.umbrella_revmap         = {}
-    self.umbrella_old_revmap     = {}
-    self.update_tags             = update_tags
-    self.new_umbrella_hashes     = set()
+    self.new_upstream_prefix      = new_upstream_prefix
+    self.old_upstream_prefix      = old_upstream_prefix
+    self.revmap_in_file           = revmap_in_file
+    self.revmap_out_file          = revmap_out_file
+    self.reflist                  = reflist
+    self.new_upstream_hashes      = set()
+    self.added_submodules         = set()
+    self.merged_upstream_parents  = set()
+    self.revap                    = {}
+    self.dbg                      = debug
+    self.prev_submodules          = []
+    self.abort_bad_submodule      = abort_bad_submodule
+    self.no_rewrite_commit_msg    = no_rewrite_commit_msg
+    self.subdir                   = subdir
+    self.umbrella_merge_base      = {}
+    self.submodule_revmap         = {}
+    self.umbrella_revmap          = {}
+    self.inlined_submodule_revmap = {}
+    self.update_tags              = update_tags
+    self.new_umbrella_hashes      = set()
 
     if submodule_map_file:
       with open(submodule_map_file) as f:
@@ -518,36 +517,17 @@ class Zipper:
     # Map the original commit to the new zippped commit.
     self.debug('Mapping umbrella %s to %s' % (oldhash, newhash))
     self.umbrella_revmap[oldhash] = newhash
-    self.umbrella_old_revmap[newhash] = oldhash
     self.new_umbrella_hashes.add(newhash)
 
     # Map the submodule commit to the new zipped commit so we
     # can update tags.
     self.debug('Updated submodules %s' % updated_submodules)
+    self.inlined_submodule_revmap[newhash] = []
     for sub in updated_submodules:
       self.debug('Mapping submodule %s to %s' % (sub, newhash))
-      self.submodule_revmap[sub] = newhash
-      self.submodule_old_revmap[newhash] = sub
+      self.inlined_submodule_revmap[newhash].append(sub)
 
     return None
-
-  def map_umbrella_commit(self, oldhash):
-    newhash = self.umbrella_revmap.get(oldhash)
-    if newhash:
-      return newhash
-    return oldhash
-
-  def map_submodule_commit(self, oldhash):
-    newhash = self.submodule_revmap.get(oldhash)
-    if newhash:
-      return newhash
-    return oldhash
-
-  def map_commit(self, oldhash):
-    newhash = self.map_submodule_commit(oldhash)
-    if newhash != oldhash:
-      return newhash
-    return self.map_umbrella_commit(oldhash)
 
   def zip_filter(self, fm, githash, commit, oldparents):
     """Rewrite an umbrella branch with interleaved commits
@@ -779,13 +759,12 @@ class Zipper:
 
       if path not in self.added_submodules:
         self.debug('Add new submodule %s' % path)
-        self.added_submodules.add(path)
         updated_submodule_hashes.append(newhash)
         new_submodules.append(newhash)
 
       # Rewrite parents.
-      self.debug("Adding submodule parents")
       if path not in self.added_submodules or (prev_submodule_hash != oldhash and prev_submodule_hash):
+        self.debug("Adding submodule parents for %s" % path)
         # We either added or updated a submodule.  Add parents of the
         # submodule commit if they are not from upstream.  If they are
         # from upstream they will be parented (possibly transitively)
@@ -807,9 +786,11 @@ class Zipper:
           # Check to see if this submodule parent was incorporated
           # into the umbrella, either inlined directly or transitively
           # via one of this commit's parents.
-          downstream_umbrella_parents = (self.submodule_old_revmap[p]
+          downstream_umbrella_parents = [item
                                          for p in newparents
-                                         if p in self.submodule_old_revmap)
+                                         if p in self.inlined_submodule_revmap
+                                         for item in self.inlined_submodule_revmap[p]]
+          self.debug('Downstream umbrella parents: %s' % downstream_umbrella_parents)
           if self.is_same_or_ancestor_of_any(submodule_parent,
                                              downstream_umbrella_parents):
             self.debug('Filtering submodule %s parent %s which is ancestor of inlined %s' %
@@ -819,6 +800,8 @@ class Zipper:
           self.debug('Add parent %s from submodule %s add or update' %
                      (submodule_parent, path))
           submodule_add_parents.append(submodule_parent)
+
+      self.added_submodules.add(path)
 
     if not oldparents:
       # This is the first commit in the umbrella.
