@@ -277,8 +277,11 @@ class Zipper:
     self.subdir                  = subdir
     self.umbrella_merge_base     = {}
     self.submodule_revmap        = {}
+    self.submodule_old_revmap    = {}
     self.umbrella_revmap         = {}
+    self.umbrella_old_revmap     = {}
     self.update_tags             = update_tags
+    self.new_umbrella_hashes     = set()
 
     if submodule_map_file:
       with open(submodule_map_file) as f:
@@ -428,26 +431,43 @@ class Zipper:
 
     return tree
 
+  def is_mark(self, mark):
+    if mark.startswith(':'):
+      return True
+    return False
+
   def is_ancestor(self, potential_ancestor, potential_descendent):
-    ancestor_hash   = self.fm.get_mark(potential_ancestor)
-    descendent_hash = self.fm.get_mark(potential_descendent)
+    if self.is_mark(potential_ancestor):
+      raise Exception('Cannot check ancestry of mark %s', potential_ancestor)
+    if self.is_mark(potential_descendent):
+      raise Exception('Cannot check ancestry of mark %s', potential_descendent)
+
     return subprocess.call(["git", "merge-base", "--is-ancestor",
-                            ancestor_hash, descendent_hash]) == 0
+                            potential_ancestor, potential_descendent]) == 0
 
   def is_same_or_ancestor(self, potential_ancestor, potential_descendent):
-    ancestor_hash   = self.fm.get_mark(potential_ancestor)
-    descendent_hash = self.fm.get_mark(potential_descendent)
-    if ancestor_hash == descendent_hash:
+    if self.is_mark(potential_ancestor):
+      raise Exception('Cannot check ancestry of mark %s', potential_ancestor)
+    if self.is_mark(potential_descendent):
+      raise Exception('Cannot check ancestry of mark %s', potential_descendent)
+
+    if potential_ancestor == potential_descendent:
       return True
 
-    return self.is_ancestor(ancestor_hash, descendent_hash)
+    return self.is_ancestor(potential_ancestor, potential_descendent)
 
   def list_is_ancestor(self, potential_ancestors, potential_descendent):
-    Result = True
     for potential_ancestor in potential_ancestors:
       if not self.is_ancestor(potential_ancestor, potential_descendent):
-        Result = False
-    return Result
+        return False
+    return True
+
+  def is_same_or_ancestor_of_any(self, potential_ancestor, potential_descendents):
+    for potential_descendent in potential_descendents:
+      if self.is_same_or_ancestor(potential_ancestor, potential_descendent):
+        return True
+
+    return False
 
   def get_latest_upstream_commit(self, githash, submodules, candidates):
     """Determine which of candidates has the upstream tree we want."""
@@ -498,6 +518,8 @@ class Zipper:
     # Map the original commit to the new zippped commit.
     self.debug('Mapping umbrella %s to %s' % (oldhash, newhash))
     self.umbrella_revmap[oldhash] = newhash
+    self.umbrella_old_revmap[newhash] = oldhash
+    self.new_umbrella_hashes.add(newhash)
 
     # Map the submodule commit to the new zipped commit so we
     # can update tags.
@@ -505,6 +527,7 @@ class Zipper:
     for sub in updated_submodules:
       self.debug('Mapping submodule %s to %s' % (sub, newhash))
       self.submodule_revmap[sub] = newhash
+      self.submodule_old_revmap[newhash] = sub
 
     return None
 
@@ -761,31 +784,41 @@ class Zipper:
         new_submodules.append(newhash)
 
       # Rewrite parents.
+      self.debug("Adding submodule parents")
       if path not in self.added_submodules or (prev_submodule_hash != oldhash and prev_submodule_hash):
-        # Add parents of the submodule commit if they are not from
-        # upstream.  If they are from upstream they will be parented
-        # (possibly transitively) through umbrella_merge_base_hash
-        # below.
-        for parent in newcommit.parents:
-          mapped_submodule_parent= self.map_commit(parent)
+        # We either added or updated a submodule.  Add parents of the
+        # submodule commit if they are not from upstream.  If they are
+        # from upstream they will be parented (possibly transitively)
+        # through umbrella_merge_base_hash below.
+        for submodule_parent in newcommit.parents:
+          if submodule_parent in self.new_upstream_hashes:
+            # This should have been merged as part of
+            # umbrella_merge_base_hash.
+            if not self.is_same_or_ancestor(submodule_parent, umbrella_merge_base_hash):
+              raise Exception('Submodule parent %s in new upstream set not an ancestor of merge base %s' %
+                              (submodule_parent, umbrella_merge_base_hash))
+            self.debug('Filtering submodule %s upstream parent %s' %
+                       (path, submodule_parent))
+            continue
 
-          doadd = True
-          for newparent in newparents:
-            mapped_newparent = self.map_commit(newparent)
-            if self.is_same_or_ancestor(mapped_submodule_parent, mapped_newparent):
-              self.debug('Filtering new parent %s which is ancestor of %s' %
-                         (mapped_submodule_parent, mapped_newparent))
-              doadd = False
-              break
-            if self.is_same_or_ancestor(mapped_submodule_parent, umbrella_merge_base_hash):
-              self.debug('Filtering new parent %s which is ancestor of merge-base %s' %
-                         (mapped_submodule_parent, umbrella_merge_base_hash))
-              doadd = False
-              break
-          if doadd:
-            self.debug('Add parent %s from submodule add or update' %
-                       mapped_submodule_parent)
-            submodule_add_parents.append(mapped_submodule_parent)
+          # This submodule parent is a monorepo-rewritten downstream
+          # commit.
+
+          # Check to see if this submodule parent was incorporated
+          # into the umbrella, either inlined directly or transitively
+          # via one of this commit's parents.
+          downstream_umbrella_parents = (self.submodule_old_revmap[p]
+                                         for p in newparents
+                                         if p in self.submodule_old_revmap)
+          if self.is_same_or_ancestor_of_any(submodule_parent,
+                                             downstream_umbrella_parents):
+            self.debug('Filtering submodule %s parent %s which is ancestor of inlined %s' %
+                       (path, submodule_parent, downstream_umbrella_parents))
+            continue
+
+          self.debug('Add parent %s from submodule %s add or update' %
+                     (submodule_parent, path))
+          submodule_add_parents.append(submodule_parent)
 
     if not oldparents:
       # This is the first commit in the umbrella.
