@@ -767,10 +767,25 @@ class Zipper:
         # (possibly transitively) through umbrella_merge_base_hash
         # below.
         for parent in newcommit.parents:
-          parent_hash = self.fm.get_mark(parent)
-          if parent_hash not in self.new_upstream_hashes:
-            self.debug('Maybe add parent %s from submodule add or update' % parent_hash)
-            submodule_add_parents.append(parent_hash)
+          mapped_submodule_parent= self.map_commit(parent)
+
+          doadd = True
+          for newparent in newparents:
+            mapped_newparent = self.map_commit(newparent)
+            if self.is_same_or_ancestor(mapped_submodule_parent, mapped_newparent):
+              self.debug('Filtering new parent %s which is ancestor of %s' %
+                         (mapped_submodule_parent, mapped_newparent))
+              doadd = False
+              break
+            if self.is_same_or_ancestor(mapped_submodule_parent, umbrella_merge_base_hash):
+              self.debug('Filtering new parent %s which is ancestor of merge-base %s' %
+                         (mapped_submodule_parent, umbrella_merge_base_hash))
+              doadd = False
+              break
+          if doadd:
+            self.debug('Add parent %s from submodule add or update' %
+                       mapped_submodule_parent)
+            submodule_add_parents.append(mapped_submodule_parent)
 
     if not oldparents:
       # This is the first commit in the umbrella.
@@ -820,7 +835,7 @@ class Zipper:
         if self.list_is_ancestor(self.merged_upstream_parents, umbrella_merge_base_hash):
           # The new merge-base is newer than all previously-merged
           # upstream parents, so add an edge to it.
-          self.debug('Maybe add upstream merge parent %s' % umbrella_merge_base_hash)
+          self.debug('Add upstream merge parent %s' % umbrella_merge_base_hash)
           upstream_parents.append(umbrella_merge_base_hash)
           self.merged_upstream_parents.add(umbrella_merge_base_hash)
 
@@ -830,18 +845,8 @@ class Zipper:
     for name, e in newtree.get_subentries(fm).iteritems():
       self.debug('NEWTREE: %s %s' % (name, str(e)))
 
-    added_parents = submodule_add_parents
-    added_parents.extend(upstream_parents)
-
-    for addparent in added_parents:
-      doadd = True
-      for newparent in newparents:
-        if self.is_same_or_ancestor(addparent, newparent):
-          self.debug('Filtering potential new parent %s which is ancestor of %s' % (addparent, newparent))
-          doadd = False
-          break
-      if doadd:
-        commit.parents.append(addparent)
+    commit.parents.extend(submodule_add_parents)
+    commit.parents.extend(upstream_parents)
 
     commit.msg = new_commit_msg
 
