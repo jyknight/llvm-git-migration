@@ -486,14 +486,15 @@ class Zipper:
       elif not self.is_ancestor(candidate, result):
         # Neither is an ancestor of the other.  This must be a case
         # where the umbrella repository has updates from two different
-        # upstream branches.  This is highly unusual and probably
-        # something has gone wrong.  Abort for now.
-        errstr = "Commit %s has submodule updates from multiple branches (%s %s)?\n\n" % (githash, path, candidate)
+        # upstream branches.  We don't handle this yet as it would
+        # require merging the trees.
+        warnstr = "Commit %s has submodule updates from multiple branches (%s %s)\n\n" % (githash, path, candidate)
         for pathsegs, oldhash in submodules:
           errpath = '/'.join(pathsegs)
           errstr += "%s %s\n" % (errpath, oldhash)
 
-        raise Exception(errstr)
+        print('WARNING: %s' % warnstr)
+        return None
 
     self.debug("Using %s %s as merge-base\n" % (result_path, result))
 
@@ -589,9 +590,32 @@ class Zipper:
                                # umbrella commits.
 
     for op in oldparents:
+      self.debug('Checking umbrella parent %s for merge base' % op)
       parent_merge_base = self.umbrella_merge_base.get(op)
       if parent_merge_base:
-        umbrella_merge_bases.append([parent_merge_base, None])
+        self.debug('Adding parent merge base %s to merge base set' % parent_merge_base)
+        umbrella_merge_bases.append([parent_merge_base, '.'])
+      mapped_op = self.revmap.get(op)
+      if mapped_op:
+        # The umbrella commit itself has a monorepo-rewritten parent.
+        # This can happen if submodules were added to an upstream
+        # project.
+        self.debug('Adding monorepo parent %s to merge base set' % mapped_op)
+        umbrella_merge_bases.append([mapped_op, '.'])
+
+    # Rewrite existing new parents.  If the umbrella is actually an
+    # upstream project that's had submodules added to it, then this
+    # commit and its parents are actually split commits, not monorepo
+    # commits.
+    rewritten_newparents = []
+    for np in newparents:
+      mapped_np = self.revmap.get(np)
+      if mapped_np:
+        rewritten_newparents.append(mapped_np)
+      else:
+        rewritten_newparents.append(np)
+    commit.parents = rewritten_newparents
+    newparents = rewritten_newparents
 
     prev_submodules_map = {}
 
@@ -626,6 +650,7 @@ class Zipper:
     commits_to_check = umbrella_merge_bases  # Hashes of candidate
                                              # commits for the base
                                              # upstream tree.
+
     for pathsegs, oldhash in submodules:
       path='/'.join(pathsegs)
       self.debug('Found submodule (%s, %s)' % (path, oldhash))
@@ -649,9 +674,22 @@ class Zipper:
           self.debug("Upstream parent %s\n" % parent)
           commits_to_check.append([parent, path])
 
-    umbrella_merge_base_hash = self.get_latest_upstream_commit(githash,
-                                                               submodules,
-                                                               commits_to_check)
+    # Check to see if this commit is actually a monorepo-rewritten
+    # commit.  If it is, use it as the merge base.  This happens if an
+    # upstream project hash submodules added to it on a branch and
+    # there's a merge from upstream to that branch.  The merge result
+    # is what we want for everything except the submodules.
+    umbrella_merge_base_hash = None
+    mapped_githash = self.revmap.get(githash)
+    if mapped_githash:
+      self.debug('Using mapped umbrella commit %s as merge base' % mapped_githash)
+      umbrella_merge_base_hash = mapped_githash
+    else:
+      umbrella_merge_base_hash = self.get_latest_upstream_commit(githash,
+                                                                 submodules,
+                                                                 commits_to_check)
+      if not umbrella_merge_base_hash:
+        raise Exception('Umbrella merge and umbrella is not an upstream project')
 
     # Record our choice so children can find it.
     self.umbrella_merge_base[githash] = umbrella_merge_base_hash
