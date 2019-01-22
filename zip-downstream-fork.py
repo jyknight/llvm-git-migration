@@ -736,6 +736,29 @@ class Zipper:
             self.debug('Maybe add parent %s from submodule add or update' % parent_hash)
             submodule_add_parents.append(parent_hash)
 
+    if not oldparents:
+      # This is the first commit in the umbrella.
+      self.debug('First umbrella commit')
+      if len(new_submodules) == 1:
+        self.debug('Added a single submodule')
+        if len(self.added_submodules) == 1:
+          self.debug('Added submodule is only submodule')
+          if len(updated_submodule_hashes) != 1:
+            raise Exception('Added one new submodule but not exactly one updated hash?')
+          # We've added exactly one submodule.
+          subhash = updated_submodule_hashes[0]
+          if subhash in self.new_upstream_hashes:
+            # The submodule commit is from upstream.  Just return the
+            # upstream commit as-is.  This avoids duplicated a commit,
+            # which would happen since the parent of the new commit
+            # would be set to subhash.
+            self.debug('Single submodule upstream import, return commit %s' % subhash)
+            self.merged_upstream_parents.add(subhash)
+            # Tell children of githash that we used a base tree from
+            # subhash.
+            self.umbrella_merge_base[githash] = subhash
+            return self.fm.get_commit(subhash)
+
     upstream_parents = []  # Parents due to merges from upstream
 
     # Add umbrella_merge_base as a parent if it's a descendent of all
