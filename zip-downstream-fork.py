@@ -429,8 +429,10 @@ class Zipper:
     return tree
 
   def is_ancestor(self, potential_ancestor, potential_descendent):
+    ancestor_hash   = self.fm.get_mark(potential_ancestor)
+    descendent_hash = self.fm.get_mark(potential_descendent)
     return subprocess.call(["git", "merge-base", "--is-ancestor",
-                            potential_ancestor, potential_descendent]) == 0
+                            ancestor_hash, descendent_hash]) == 0
 
   def is_same_or_ancestor(self, potential_ancestor, potential_descendent):
     ancestor_hash   = self.fm.get_mark(potential_ancestor)
@@ -487,30 +489,42 @@ class Zipper:
         tree = tree.remove_path(self.fm, pathsegs)
     return tree
 
-  def map_commits(self, newhash, oldhash, updated_submodules):
+  def record_mappings(self, newhash, oldhash, updated_submodules):
     """Record the mapping of the original umbrella commit and map
        submodule update hashes to newhash so tags know where to
        point
     """
 
     # Map the original commit to the new zippped commit.
+    self.debug('Mapping umbrella %s to %s' % (oldhash, newhash))
     self.umbrella_revmap[oldhash] = newhash
 
     # Map the submodule commit to the new zipped commit so we
     # can update tags.
+    self.debug('Updated submodules %s' % updated_submodules)
     for sub in updated_submodules:
-      updated_hash = self.fm.get_mark(newhash)
-      self.debug('Mapping submodule %s to %s' % (sub, updated_hash))
-      self.submodule_revmap.update({sub: updated_hash})
-      return None
+      self.debug('Mapping submodule %s to %s' % (sub, newhash))
+      self.submodule_revmap[sub] = newhash
+
+    return None
 
   def map_umbrella_commit(self, oldhash):
     newhash = self.umbrella_revmap.get(oldhash)
-
     if newhash:
       return newhash
-
     return oldhash
+
+  def map_submodule_commit(self, oldhash):
+    newhash = self.submodule_revmap.get(oldhash)
+    if newhash:
+      return newhash
+    return oldhash
+
+  def map_commit(self, oldhash):
+    newhash = self.map_submodule_commit(oldhash)
+    if newhash != oldhash:
+      return newhash
+    return self.map_umbrella_commit(oldhash)
 
   def zip_filter(self, fm, githash, commit, oldparents):
     """Rewrite an umbrella branch with interleaved commits
@@ -572,7 +586,7 @@ class Zipper:
                                # umbrella commits.
 
     for op in oldparents:
-      parent_merge_base = self.umbrella_merge_base.get(self.fm.get_mark(op))
+      parent_merge_base = self.umbrella_merge_base.get(op)
       if parent_merge_base:
         umbrella_merge_bases.append([parent_merge_base, None])
 
@@ -627,11 +641,10 @@ class Zipper:
       self.debug('%s\n' % newcommit.msg)
 
       for parent in newcommit.parents:
-        parent_hash = self.fm.get_mark(parent)
-        if parent_hash in self.new_upstream_hashes:
+        if parent in self.new_upstream_hashes:
           # This submodule has an upstream parent.
-          self.debug("Upstream parent %s\n" % parent_hash)
-          commits_to_check.append([parent_hash, path])
+          self.debug("Upstream parent %s\n" % parent)
+          commits_to_check.append([parent, path])
 
     umbrella_merge_base_hash = self.get_latest_upstream_commit(githash,
                                                                submodules,
@@ -834,7 +847,7 @@ class Zipper:
 
     return (commit,
             lambda newhash,updated_submodules = updated_submodule_hashes, oldhash = githash:
-            self.map_commits(newhash, oldhash, updated_submodules))
+            self.record_mappings(newhash, oldhash, updated_submodules))
 
   def run(self):
     if not self.revmap_in_file:
