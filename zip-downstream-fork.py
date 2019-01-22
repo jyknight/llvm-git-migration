@@ -841,6 +841,15 @@ class Zipper:
         commit.author_date    = newcommit.author_date
         commit.committer      = newcommit.committer
         commit.committer_date = newcommit.committer_date
+    else:
+      # We updated multiple submodules or none at all.  Prepend the
+      # umbrella commit message to avoid confusing this commit with
+      # the commit that has the same message as the first message
+      # appended to new_commit_msg.
+      if not new_commit_msg:
+        new_commit_msg = commit.msg
+      else:
+        new_commit_msg = commit.msg + '\n' + new_commit_msg
 
     upstream_parents = []  # Parents due to merges from upstream
 
@@ -864,6 +873,7 @@ class Zipper:
     commit.parents.extend(submodule_add_parents)
     commit.parents.extend(upstream_parents)
 
+    self.debug('Updating commit message to:\n %s\n' % new_commit_msg)
     commit.msg = new_commit_msg
 
     return (commit,
