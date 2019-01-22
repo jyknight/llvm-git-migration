@@ -254,11 +254,16 @@ class Zipper:
   """Destructively zip a submodule umbrella repository."""
   def __init__(self, new_upstream_prefix, revmap_in_file, revmap_out_file,
                reflist, debug, abort_bad_submodule, no_rewrite_commit_msg,
-               subdir, submodule_map_file, copy_tag_prefix):
+               subdir, submodule_map_file, copy_tag_prefix,
+               old_upstream_prefix):
     if not new_upstream_prefix.endswith('/'):
       new_upstream_prefix = new_upstream_prefix + '/'
 
+    if not old_upstream_prefix.endswith('/'):
+      old_upstream_prefix = old_upstream_prefix + '/'
+
     self.new_upstream_prefix     = new_upstream_prefix
+    self.old_upstream_prefix     = old_upstream_prefix
     self.revmap_in_file          = revmap_in_file
     self.revmap_out_file         = revmap_out_file
     self.reflist                 = reflist
@@ -316,13 +321,21 @@ class Zipper:
 
   def gather_upstream_commits(self):
     """Walk all refs under new_upstream_prefix and record hashes."""
-    refs = expand_ref_pattern([self.new_upstream_prefix])
+    new_refs = expand_ref_pattern([self.new_upstream_prefix])
 
-    if not refs:
+    if not new_refs:
       raise Exception("No refs matched new upstream prefix %s" % self.new_upstream_prefix)
 
     # Save the set of git hashes for the new monorepo.
-    self.new_upstream_hashes = set(subprocess.check_output(['git', 'rev-list'] + refs).split('\n')[:-1])
+    self.new_upstream_hashes = set(subprocess.check_output(['git', 'rev-list'] + new_refs).split('\n')[:-1])
+
+    old_refs = expand_ref_pattern([self.old_upstream_prefix])
+
+    if not old_refs:
+      raise Exception("No refs matched old upstream prefix %s" % self.old_upstream_prefix)
+
+    # Save the set of git hashes for the new monorepo.
+    self.old_upstream_hashes = set(subprocess.check_output(['git', 'rev-list'] + old_refs).split('\n')[:-1])
 
   def find_submodules_in_entry(self, githash, tree, path):
     """Figure out which submodules/submodules commit an existing tree references.
@@ -498,6 +511,17 @@ class Zipper:
     be changed to reflect the interleaved linear ordering in the
     umbrella history.
     """
+
+    # Don't mess with new upstream commits.
+    if githash in self.new_upstream_hashes:
+      return commit
+
+    # Don't mess with old upstream commits either.  This happens if,
+    # for example, downstream uses the llvm repository itself as an
+    # umbrella.  We only want to rewrite the downstream commits of
+    # such a repository.
+    if githash in self.old_upstream_hashes:
+      return commit
 
     self.debug('--- commit %s' % githash)
     self.debug('%s\n' % commit.msg)
@@ -793,6 +817,8 @@ Typical usage:
   parser.add_argument("--new-repo-prefix", metavar="REFNAME",
                       default="refs/remotes/new",
                       help="The prefix for all the refs of the new repository (default: %(default)s).")
+  parser.add_argument("--old-repo-prefix", metavar="REFPATTERN", default="refs/remotes/old",
+                      help="The prefix for all the refs of the old repository/repositories (default: %(default)s).")
   parser.add_argument("reflist", metavar="REFPATTERN",
                       help="Patterns of the references to convert.", nargs='*')
   parser.add_argument("--revmap-in", metavar="FILE", default=None)
@@ -811,4 +837,5 @@ Typical usage:
   args = parser.parse_args()
   Zipper(args.new_repo_prefix, args.revmap_in, args.revmap_out, args.reflist,
          args.debug, args.abort_bad_submodule, args.no_rewrite_commit_msg,
-         args.subdir, args.submodule_map, args.copy_tag_prefix).run()
+         args.subdir, args.submodule_map, args.copy_tag_prefix,
+         args.old_repo_prefix).run()
