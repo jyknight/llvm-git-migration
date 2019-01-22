@@ -278,6 +278,7 @@ class Zipper:
     self.subdir                  = subdir
     self.umbrella_merge_base     = {}
     self.submodule_revmap        = {}
+    self.umbrella_revmap         = {}
     self.tag_prefix              = copy_tag_prefix
 
     if submodule_map_file:
@@ -432,6 +433,14 @@ class Zipper:
     return subprocess.call(["git", "merge-base", "--is-ancestor",
                             potential_ancestor, potential_descendent]) == 0
 
+  def is_same_or_ancestor(self, potential_ancestor, potential_descendent):
+    ancestor_hash   = self.fm.get_mark(potential_ancestor)
+    descendent_hash = self.fm.get_mark(potential_descendent)
+    if ancestor_hash == descendent_hash:
+      return True
+
+    return self.is_ancestor(ancestor_hash, descendent_hash)
+
   def list_is_ancestor(self, potential_ancestors, potential_descendent):
     Result = True
     for potential_ancestor in potential_ancestors:
@@ -479,8 +488,15 @@ class Zipper:
         tree = tree.remove_path(self.fm, pathsegs)
     return tree
 
-  def map_for_tags(self, newhash, updated_submodules):
-    """Map submodule update hashes to newhash so tags know where to point"""
+  def map_commits(self, newhash, oldhash, updated_submodules):
+    """Record the mapping of the original umbrella commit and map
+       submodule update hashes to newhash so tags know where to
+       point
+    """
+
+    # Map the original commit to the new zippped commit.
+    self.umbrella_revmap[oldhash] = newhash
+
     # Map the submodule commit to the new zipped commit so we
     # can update tags.
     for sub in updated_submodules:
@@ -488,6 +504,14 @@ class Zipper:
       self.debug('Mapping submodule %s to %s' % (sub, updated_hash))
       self.submodule_revmap.update({sub: updated_hash})
       return None
+
+  def map_umbrella_commit(self, oldhash):
+    newhash = self.umbrella_revmap.get(oldhash)
+
+    if newhash:
+      return newhash
+
+    return oldhash
 
   def zip_filter(self, fm, githash, commit, oldparents):
     """Rewrite an umbrella branch with interleaved commits
@@ -525,6 +549,8 @@ class Zipper:
 
     self.debug('--- commit %s' % githash)
     self.debug('%s\n' % commit.msg)
+
+    newparents = commit.parents
 
     submodules = self.find_submodules(commit, githash)
     if not submodules:
@@ -634,12 +660,11 @@ class Zipper:
     # Import trees from commits pointed to by the submodules.  We
     # assume the trees should be placed in the same paths the
     # submodules appear.
-    submodule_add_parents = []    # Parents due to a "submodule add"
-                                  # operation
-    upstream_parents = []         # Parents due to merges from
-                                  # upstream
-    updated_submodule_hashes = [] # Rewritten commit hash of updated
-                                  # submodules
+    submodule_add_parents = []      # Parents due to a "submodule add"
+                                    # or update operation
+    updated_submodule_hashes = []   # Rewritten commit hash of updated
+                                    # submodules
+    new_submodules = []             # Submodules we added in this commit
     for pathsegs, oldhash in submodules:
       path='/'.join(pathsegs)
 
@@ -693,12 +718,25 @@ class Zipper:
           else:
             new_commit_msg += '\n' + newcommit.msg
 
-      # Rewrite parents.  If this commit added a new submodule, add a
-      # parent to the corresponding commit.
       if path not in self.added_submodules:
         self.debug('Add new submodule %s' % path)
-        submodule_add_parents.append(newhash)
         self.added_submodules.add(path)
+        updated_submodule_hashes.append(newhash)
+        new_submodules.append(newhash)
+
+      # Rewrite parents.
+      if path not in self.added_submodules or (prev_submodule_hash != oldhash and prev_submodule_hash):
+        # Add parents of the submodule commit if they are not from
+        # upstream.  If they are from upstream they will be parented
+        # (possibly transitively) through umbrella_merge_base_hash
+        # below.
+        for parent in newcommit.parents:
+          parent_hash = self.fm.get_mark(parent)
+          if parent_hash not in self.new_upstream_hashes:
+            self.debug('Maybe add parent %s from submodule add or update' % parent_hash)
+            submodule_add_parents.append(parent_hash)
+
+    upstream_parents = []  # Parents due to merges from upstream
 
     # Add umbrella_merge_base as a parent if it's a descendent of all
     # previously merged upstream commits.
@@ -707,7 +745,7 @@ class Zipper:
         if self.list_is_ancestor(self.merged_upstream_parents, umbrella_merge_base_hash):
           # The new merge-base is newer than all previously-merged
           # upstream parents, so add an edge to it.
-          self.debug('Add upstream merge parent %s' % umbrella_merge_base_hash)
+          self.debug('Maybe add upstream merge parent %s' % umbrella_merge_base_hash)
           upstream_parents.append(umbrella_merge_base_hash)
           self.merged_upstream_parents.add(umbrella_merge_base_hash)
 
@@ -717,13 +755,24 @@ class Zipper:
     for name, e in newtree.get_subentries(fm).iteritems():
       self.debug('NEWTREE: %s %s' % (name, str(e)))
 
-    commit.parents.extend(submodule_add_parents)
-    commit.parents.extend(upstream_parents)
+    added_parents = submodule_add_parents
+    added_parents.extend(upstream_parents)
+
+    for addparent in added_parents:
+      doadd = True
+      for newparent in newparents:
+        if self.is_same_or_ancestor(addparent, newparent):
+          self.debug('Filtering potential new parent %s which is ancestor of %s' % (addparent, newparent))
+          doadd = False
+          break
+      if doadd:
+        commit.parents.append(addparent)
+
     commit.msg = new_commit_msg
 
     return (commit,
-            lambda newhash,updated_submodules = updated_submodule_hashes:
-            self.map_for_tags(newhash, updated_submodules))
+            lambda newhash,updated_submodules = updated_submodule_hashes, oldhash = githash:
+            self.map_commits(newhash, oldhash, updated_submodules))
 
   def tag_filter(self, fm, tagobj):
     """Update tags in submodule histories to point to new umbrella commits."""
