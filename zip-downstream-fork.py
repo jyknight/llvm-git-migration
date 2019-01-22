@@ -581,6 +581,9 @@ class Zipper:
 
     # Track the old hashes for submodules so we know which
     # submodules this commit updated below.
+
+    # FIXME prev_submodules needs to be mapped by githash and checked
+    # from oldparents to handle branches in the umbrella.
     for prev_submodule_pathsegs, prev_submodule_hash in self.prev_submodules:
       prev_submodules_map['/'.join(prev_submodule_pathsegs)] = prev_submodule_hash
 
@@ -698,9 +701,30 @@ class Zipper:
       subpaths = (x.split('/') for x in subpaths)
       submodule_tree = self.remove_submodules(submodule_tree, subpaths, path)
 
-      # Update the tree for the subproject from the commit referenced
-      # by the submodule update, overwriting any existing tree for the
-      # subproject.
+      # FIXME: Should we always take the latest version of the
+      # upstream tree when a submodule is updated to an upstream
+      # commit?  Uncommenting the following will do that.
+      #
+      # Without the following we will respect the submodule update and
+      # set the tree to the referenced commit, even if it means moving
+      # the tree for that subdirectory "backwards" from where it is in
+      # the upstream linear history relative to other imported
+      # submodules.
+      #
+      # This seems like an ok thing to do since it represents the
+      # umbrella history more accurately and it's likely that any
+      # submodules added to the umbrella were done in a coordinated
+      # fashion and we should respect that.
+      #
+      # If we're importing a commit from upstream, don't rewrite it,
+      # as the umbrella_merge_base_tree has it.
+      #if newhash not in self.new_upstream_hashes:
+        # Update the tree for the subproject from the commit referenced
+        # by the submodule update, overwriting any existing tree for the
+        # subproject.
+
+      # Put this under the aboe if to not rewrite submodule trees from
+      # upstrem.
       newtree = newtree.add_path(self.fm, upstream_segs, submodule_tree)
 
       prev_submodule_hash = None
