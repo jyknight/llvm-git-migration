@@ -759,6 +759,22 @@ class Zipper:
             self.umbrella_merge_base[githash] = subhash
             return self.fm.get_commit(subhash)
 
+    if len(updated_submodule_hashes) == 1:
+      # We only updated or added one submodule.  If we're re-writing
+      # commit messages, take author, committer and date information
+      # from the original commit.  If multiple submodules are updated,
+      # take the author, committer and date information from the
+      # umbrella commit.
+      if not self.no_rewrite_commit_msg:
+        subhash = updated_submodule_hashes[0]
+        self.debug('Updating author and commiter info from %s' % subhash)
+        newcommit = self.fm.get_commit(subhash)
+
+        commit.author         = newcommit.author
+        commit.author_date    = newcommit.author_date
+        commit.committer      = newcommit.committer
+        commit.committer_date = newcommit.committer_date
+
     upstream_parents = []  # Parents due to merges from upstream
 
     # Add umbrella_merge_base as a parent if it's a descendent of all
