@@ -261,26 +261,40 @@ class Zipper:
     if not old_upstream_prefix.endswith('/'):
       old_upstream_prefix = old_upstream_prefix + '/'
 
-    self.new_upstream_prefix      = new_upstream_prefix
-    self.old_upstream_prefix      = old_upstream_prefix
-    self.revmap_in_file           = revmap_in_file
-    self.revmap_out_file          = revmap_out_file
-    self.reflist                  = reflist
-    self.new_upstream_hashes      = set()
-    self.added_submodules         = set()
-    self.merged_upstream_parents  = set()
-    self.revap                    = {}
-    self.dbg                      = debug
-    self.prev_submodules          = []
-    self.abort_bad_submodule      = abort_bad_submodule
-    self.no_rewrite_commit_msg    = no_rewrite_commit_msg
-    self.subdir                   = subdir
-    self.base_tree_map            = {}
-    self.submodule_revmap         = {}
-    self.umbrella_revmap          = {}
-    self.inlined_submodule_revmap = {}
-    self.update_tags              = update_tags
-    self.new_umbrella_hashes      = set()
+    self.new_upstream_prefix       = new_upstream_prefix
+    self.old_upstream_prefix       = old_upstream_prefix
+    self.revmap_in_file            = revmap_in_file
+    self.revmap_out_file           = revmap_out_file
+    self.reflist                   = reflist
+    self.new_upstream_hashes       = set()
+    self.added_submodules          = set() # Submodules added so far.
+                                           # FIXME: Index by old
+                                           # umbrella parent.
+    self.merged_upstream_parents   = {} # Latest merged upstream
+                                        # parents for each submodule,
+                                        # indexed by old umbrella
+                                        # parent.
+    self.merged_downstream_parents = {} # Latest merged downstream
+                                        # parents for each submodule,
+                                        # indexed by old umbrella
+                                        # parent.
+    self.revap                     = {} # Map from old downstream
+                                        # commit hash to new
+                                        # downstream commit hash.
+    self.dbg                       = debug
+    self.prev_submodules           = [] # Most-recently-merged commit
+                                        # of each submodule.  FIXME:
+                                        # Index by old umbrella
+                                        # parents.
+    self.abort_bad_submodule       = abort_bad_submodule
+    self.no_rewrite_commit_msg     = no_rewrite_commit_msg
+    self.subdir                    = subdir
+    self.base_tree_map             = {}
+    self.submodule_revmap          = {}
+    self.umbrella_revmap           = {} # Map from old umbrella commit
+                                        # hash to new umbrella commit
+                                        # hash/mark.
+    self.update_tags               = update_tags
 
     if submodule_map_file:
       with open(submodule_map_file) as f:
@@ -481,15 +495,6 @@ class Zipper:
     # Map the original commit to the new zippped commit.
     self.debug('Mapping umbrella %s to %s' % (oldhash, newhash))
     self.umbrella_revmap[oldhash] = newhash
-    self.new_umbrella_hashes.add(newhash)
-
-    # Map the submodule commit to the new zipped commit so we
-    # can update tags.
-    self.debug('Updated submodules %s' % updated_submodules)
-    self.inlined_submodule_revmap[newhash] = []
-    for pathsegs, oldsubhash, newsubhash in updated_submodules:
-      self.debug('Mapping submodule %s to %s' % (newsubhash, newhash))
-      self.inlined_submodule_revmap[newhash].append(newsubhash)
 
     return None
 
@@ -599,6 +604,39 @@ class Zipper:
     self.debug('Updated to added submodules: %s' % updated_submodules)
     return updated_submodules
 
+  def update_merged_parents(self, githash, submodules):
+    """Record the upstream and downstream parents of updated
+       submodules."""
+    self.merged_upstream_parents[githash]   = {}
+    self.merged_downstream_parents[githash] = {}
+
+    for pathsegs, oldhash, in submodules:
+      path='/'.join(pathsegs)
+
+      # Get the hash of the monorepo-rewritten commit corresponding to
+      # the submodule update.
+      newhash = self.revmap.get(oldhash, oldhash)
+
+      # Get the monorepo-rewritten submodule commit.
+      newcommit = self.fm.get_commit(newhash)
+
+      upstream_parents = []
+      downstream_parents = []
+      for p in newcommit.parents:
+        if p in self.new_upstream_hashes:
+          upstream_parents.append(p)
+          continue
+        downstream_parents.append(p)
+
+      # Also include the submodule commit itself.
+      if newhash in self.new_upstream_hashes:
+        upstream_parents.append(newhash)
+      else:
+        downstream_parents.append(newhash)
+
+      self.merged_upstream_parents[githash][path]   = upstream_parents
+      self.merged_downstream_parents[githash][path] = downstream_parents
+
   def determine_parents(self, fm, githash, commit, oldparents, submodules,
                         updated_submodules):
     # Rewrite existing new parents.  If the umbrella is actually an
@@ -622,14 +660,6 @@ class Zipper:
       if np_hash in self.new_upstream_hashes:
         rewritten_or_upstream_parents.append(np_hash)
 
-    # Gather umbfrella commit parents that are monorepo-rewritten
-    # downstream commits.
-    downstream_umbrella_parents = [item
-                                   for up in commit.parents
-                                   if up in self.inlined_submodule_revmap
-                                   for item in self.inlined_submodule_revmap[up]]
-    self.debug('Downstream umbrella parents: %s' % downstream_umbrella_parents)
-
     # Check submodules that were added or updated.  If their commits
     # have parents not already included, add them.
     submodule_upstream_parent_candidates = []
@@ -638,71 +668,49 @@ class Zipper:
 
       newcommit = self.fm.get_commit(newhash)
 
+      # Gather previously-merged upstream and downstream parents.
+      merged_upstream_parents   = []
+      merged_downstream_parents = []
+      for op in oldparents:
+        upstream_map = self.merged_upstream_parents.get(op)
+        if upstream_map:
+          upstream_parents = upstream_map.get(path)
+          if upstream_parents:
+            merged_upstream_parents.extend(upstream_parents)
+
+        downstream_map = self.merged_downstream_parents.get(op)
+        if downstream_map:
+          downstream_parents = downstream_map.get(path)
+          if downstream_parents:
+            merged_downstream_parents.extend(downstream_parents)
+
       for p in newcommit.parents:
         if p in self.new_upstream_hashes:
-          # This is a rewritten upstream commit.  Include this in the
-          # parent list to show which upstream commit the submodule
-          # merged in.  This might look a little strange in the
-          # history graph because there may be a merge shown from
-          # history that looks like it's already been merged.
-          # However, if this commit is an ancestor of history already
-          # merged in from another submodule, then the tree for the
-          # submodule will actually reflect the earlier commit, so it
-          # seems like a good idea to explicitly indicate that.
+          # This is a rewritten upstream commit.
+          maybe_descendent = self.is_same_or_ancestor_of_any(p, merged_upstream_parents)
+          if maybe_descendent:
+            self.debug('Filtering submodule %s upstream parent %s which is ancestor of %s' %
+                       (path, p, maybe_descendent))
+            continue
+
           self.debug('Add submodule %s upstream parent %s' % (path, p))
           parents.append(p)
 
-          # This code attempts to filter out such parents.
-          #self.debug('Add upstream parent candidate %s from submodule %s add or update' %
-          #           (p, path))
-          #submodule_upstream_parent_candidates.append((p, path))
           continue
 
         # This submodule parent is a monorepo-rewritten downstream
         # commit.
-        #
-        # Check to see if this submodule parent was incorporated
-        # into the umbrella, either inlined directly or transitively
-        # via one of this commit's parents.
-        maybe_descendent = self.is_same_or_ancestor_of_any(p, downstream_umbrella_parents)
+        maybe_descendent = self.is_same_or_ancestor_of_any(p, merged_downstream_parents)
         if maybe_descendent:
-          self.debug('Filtering submodule %s downstream parent %s which is ancestor of inlined %s' %
+          self.debug('Filtering submodule %s downstream parent %s which is ancestor of %s' %
                      (path, p, maybe_descendent))
           # Remember this as it might be a descendent of an upstream
           # parent candidate.
-          rewritten_or_upstream_parents.append(maybe_descendent)
           continue
 
         self.debug('Add downstream parent %s from submodule %s add or update' %
                    (p, path))
         parents.append(p)
-
-    # Now we have a list of submodule parents that are rewritten
-    # upstream commits.  These must have a total order.  Find the
-    # latest one.
-    #
-    # This bit doesn't actually run unless the upstream parent
-    # filtering code above is enabled, since
-    # submodule_upstream_parent_candidates will always be empty.
-    if submodule_upstream_parent_candidates:
-      latest_upstream = self.get_latest_upstream_commit(githash, submodules,
-                                                        submodule_upstream_parent_candidates)
-      if not latest_upstream:
-        raise Exception('No total order of submodule upstream parents %s\n' %
-                        submodule_upstream_parent_candidates)
-
-      self.debug('Latest submodule upstream parent %s' % latest_upstream)
-
-      maybe_descendent = self.is_same_or_ancestor_of_any(latest_upstream,
-                                                         rewritten_or_upstream_parents)
-      if maybe_descendent:
-        self.debug('Filtering latest upstream parent %s which is ancestor of umbrella parent %s' %
-                   (latest_upstream, maybe_descendent))
-      else:
-        # This is an upstream parent not already covered by existing
-        # parents.  Add it.
-        self.debug('Add latest submodule parent %s' % latest_upstream)
-        parents.append(latest_upstream)
 
     self.debug('New parents: %s' % parents)
     return parents
@@ -884,10 +892,10 @@ class Zipper:
           # which would happen since the parent of the new commit
           # would be set to subhash.
           self.debug('Single submodule upstream import, return commit %s' % newhash)
-          self.merged_upstream_parents.add(newhash)
           # Tell children of githash that we used a base tree from
           # subhash.
           self.base_tree_map[githash] = newhash
+          self.update_merged_parents(githash, submodules)
           return self.fm.get_commit(newhash)
 
     # Determine the base tree.
@@ -906,6 +914,8 @@ class Zipper:
     commit.parents = self.determine_parents(fm, githash, commit, oldparents,
                                             submodules, updated_submodules)
 
+
+    self.update_merged_parents(githash, submodules)
 
     commit.msg = self.get_commit_message(githash, commit, oldparents,
                                          submodules, updated_submodules)
