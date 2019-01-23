@@ -275,7 +275,7 @@ class Zipper:
     self.abort_bad_submodule      = abort_bad_submodule
     self.no_rewrite_commit_msg    = no_rewrite_commit_msg
     self.subdir                   = subdir
-    self.umbrella_merge_base      = {}
+    self.base_tree_map            = {}
     self.submodule_revmap         = {}
     self.umbrella_revmap          = {}
     self.inlined_submodule_revmap = {}
@@ -308,18 +308,6 @@ class Zipper:
     if self.dbg:
       print msg
       sys.stdout.flush
-
-  def get_user_yes_no(self, msg):
-    sys.stdout.flush
-    done = False
-    while not done:
-      answer = raw_input(msg + " (y/n) ")
-      answer = answer.strip()
-      done = True
-      if answer is not "y" and answer is not "n":
-        done = False
-
-    return answer
 
   def gather_upstream_commits(self):
     """Walk all refs under new_upstream_prefix and record hashes."""
@@ -406,30 +394,6 @@ class Zipper:
 
     return tree
 
-  def rewrite_tree(self, tree, subdir):
-    """Move the top-level entries under subdir"""
-
-    pathsegs = subdir.split('/')
-
-    if tree.mode == '40000':
-      entries = tree.get_subentries(self.fm).copy()
-
-      subtree = fast_filter_branch.TreeEntry('40000', sub_entries = entries)
-
-      subtree.write_subentries(self.fm)
-
-      tree = tree.add_path(self.fm, pathsegs, subtree)
-
-      for name, entry in tree.get_subentries(self.fm).items():
-        if name is not subdir:
-          tree = tree.remove_entry(self.fm, name)
-
-      self.debug('NEWTREE:\n')
-      for name, entry in tree.get_subentries(self.fm).items():
-        self.debug('%s %s\n' % (name, str(entry)))
-
-    return tree
-
   def is_mark(self, mark):
     if mark.startswith(':'):
       return True
@@ -437,18 +401,18 @@ class Zipper:
 
   def is_ancestor(self, potential_ancestor, potential_descendent):
     if self.is_mark(potential_ancestor):
-      raise Exception('Cannot check ancestry of mark %s', potential_ancestor)
+      raise Exception('Cannot check ancestry of mark %s' % potential_ancestor)
     if self.is_mark(potential_descendent):
-      raise Exception('Cannot check ancestry of mark %s', potential_descendent)
+      raise Exception('Cannot check ancestry of mark %s' % potential_descendent)
 
     return subprocess.call(["git", "merge-base", "--is-ancestor",
                             potential_ancestor, potential_descendent]) == 0
 
   def is_same_or_ancestor(self, potential_ancestor, potential_descendent):
     if self.is_mark(potential_ancestor):
-      raise Exception('Cannot check ancestry of mark %s', potential_ancestor)
+      raise Exception('Cannot check ancestry of mark %s' % potential_ancestor)
     if self.is_mark(potential_descendent):
-      raise Exception('Cannot check ancestry of mark %s', potential_descendent)
+      raise Exception('Cannot check ancestry of mark %s' % potential_descendent)
 
     if potential_ancestor == potential_descendent:
       return True
@@ -464,9 +428,9 @@ class Zipper:
   def is_same_or_ancestor_of_any(self, potential_ancestor, potential_descendents):
     for potential_descendent in potential_descendents:
       if self.is_same_or_ancestor(potential_ancestor, potential_descendent):
-        return True
+        return potential_descendent
 
-    return False
+    return None
 
   def get_latest_upstream_commit(self, githash, submodules, candidates):
     """Determine which of candidates has the upstream tree we want."""
@@ -488,15 +452,14 @@ class Zipper:
         # where the umbrella repository has updates from two different
         # upstream branches.  We don't handle this yet as it would
         # require merging the trees.
-        warnstr = "Commit %s has submodule updates from multiple branches (%s %s)\n\n" % (githash, path, candidate)
+        warnstr = "Commit %s %s: no order between (%s %s)\n\n" % (githash, path,
+                                                                  result, candidate)
         for pathsegs, oldhash in submodules:
           errpath = '/'.join(pathsegs)
           errstr += "%s %s\n" % (errpath, oldhash)
 
         print('WARNING: %s' % warnstr)
         return None
-
-    self.debug("Using %s %s as merge-base\n" % (result_path, result))
 
     return result
 
@@ -524,11 +487,346 @@ class Zipper:
     # can update tags.
     self.debug('Updated submodules %s' % updated_submodules)
     self.inlined_submodule_revmap[newhash] = []
-    for sub in updated_submodules:
-      self.debug('Mapping submodule %s to %s' % (sub, newhash))
-      self.inlined_submodule_revmap[newhash].append(sub)
+    for pathsegs, oldsubhash, newsubhash in updated_submodules:
+      self.debug('Mapping submodule %s to %s' % (newsubhash, newhash))
+      self.inlined_submodule_revmap[newhash].append(newsubhash)
 
     return None
+
+  def get_base_tree_commit_hash(self, fm, githash, commit, oldparents, submodules):
+    """Determine the base tree for the rewritten umbrella commit"""
+    # The content of the commit should be the combination of the
+    # content from the submodules and elements from the monorepo tree
+    # not updated by submodules.  The tricky part is figuring out
+    # which monorepo tree that should be.
+
+    # Check to see if this commit is actually a monorepo-rewritten
+    # commit.  If it is, use it as the base tree.  This happens if an
+    # upstream project hash submodules added to it.
+    mapped_githash = self.revmap.get(githash)
+    if mapped_githash:
+      self.debug('Using mapped umbrella commit %s as base tree' % mapped_githash)
+      return mapped_githash
+
+    # Check all of the upstream ancestors and see which is the
+    # earliest.
+    commits_to_check = []
+
+    # Add the merge base from the umbrella's parents to the candidate
+    # list.  Also check for upstream parents which are also
+    # candidates.
+    for op in oldparents:
+      self.debug('Checking umbrella parent %s for merge base' % op)
+      parent_merge_base = self.base_tree_map.get(op)
+      if parent_merge_base:
+        self.debug('Adding parent merge base %s to merge base set' % parent_merge_base)
+        commits_to_check.append([parent_merge_base, '.'])
+      mapped_op = self.revmap.get(op)
+      if mapped_op:
+        # The umbrella commit itself has a monorepo-rewritten parent.
+        # This can happen if submodules were added to an upstream
+        # project.
+        self.debug('Adding monorepo parent %s to merge base set' % mapped_op)
+        commits_to_check.append([mapped_op, '.'])
+
+    for pathsegs, oldhash in submodules:
+      path='/'.join(pathsegs)
+      self.debug('Found submodule (%s, %s)' % (path, oldhash))
+
+      # Get the hash of the monorepo-rewritten commit corresponding to
+      # the submodule update.
+      newhash = self.revmap.get(oldhash, oldhash)
+      self.debug('New hash: %s' % newhash)
+
+      if newhash in self.new_upstream_hashes:
+        self.debug("Upstream submodule update to %s\n" % newhash)
+        commits_to_check.append([newhash, path])
+
+      newcommit = self.fm.get_commit(newhash)
+      self.debug('%s\n' % newcommit.msg)
+
+      for parent in newcommit.parents:
+        if parent in self.new_upstream_hashes:
+          # This submodule has an upstream parent.  It is a candidate
+          # for the base tree.
+          self.debug("Upstream parent %s\n" % parent)
+          commits_to_check.append([parent, path])
+
+    result = self.get_latest_upstream_commit(githash, submodules,
+                                             commits_to_check)
+
+    if not result:
+      raise Exception('Umbrella merge and umbrella is not an upstream project')
+
+    self.debug('Using commit %s as base tree' % result)
+
+    return result
+
+  def get_updated_or_added_submodules(self, githash, commit, oldparents,
+                                      submodules):
+    prev_submodules_map = {}
+
+    # Track the old hashes for submodules so we know which
+    # submodules this commit updated below.
+
+    # FIXME prev_submodules needs to be mapped by githash and checked
+    # from oldparents to handle branches in the umbrella.
+    for prev_submodule_pathsegs, prev_submodule_hash in self.prev_submodules:
+      prev_submodules_map['/'.join(prev_submodule_pathsegs)] = prev_submodule_hash
+
+    self.prev_submodules = submodules
+
+    updated_submodules = []
+    for pathsegs, oldhash in submodules:
+      path='/'.join(pathsegs)
+
+      # Get the hash of the monorepo-rewritten commit corresponding to
+      # the submodule update.
+      newhash = self.revmap.get(oldhash, oldhash)
+      newcommit = self.fm.get_commit(newhash)
+
+      prev_submodule_hash = None
+      if path in prev_submodules_map:
+        prev_submodule_hash = prev_submodules_map[path]
+
+      if path not in self.added_submodules or (prev_submodule_hash != oldhash and
+                                               prev_submodule_hash):
+        self.debug('Updated or added submodule %s to %s -> %s' %
+                   (path, oldhash, newhash))
+        updated_submodules.append((pathsegs, oldhash, newhash))
+      self.added_submodules.add(path)
+
+    self.debug('Updated to added submodules: %s' % updated_submodules)
+    return updated_submodules
+
+  def determine_parents(self, fm, githash, commit, oldparents, submodules,
+                        updated_submodules):
+    # Rewrite existing new parents.  If the umbrella is actually an
+    # upstream project that's had submodules added to it, then this
+    # commit and its parents are actually split commits, not monorepo
+    # commits.  Otherwise commit is a rewritten umbrella commit and
+    # its parents were already rewritten.
+    parents = []
+    rewritten_or_upstream_parents = []
+    for np in commit.parents:
+      # Sometimes fast_filter_branch sets a parent to a mark even if
+      # the parent is an upstream monorepo commit.  We want the real
+      # commit hash if it's available.
+      np_hash = self.fm.get_mark(np)
+      mapped_np = self.revmap.get(np_hash)
+      if mapped_np:
+        parents.append(mapped_np)
+        rewritten_or_upstream_parents.append(mapped_np)
+      else:
+        parents.append(np)
+      if np_hash in self.new_upstream_hashes:
+        rewritten_or_upstream_parents.append(np_hash)
+
+    # Gather umbfrella commit parents that are monorepo-rewritten
+    # downstream commits.
+    downstream_umbrella_parents = [item
+                                   for up in commit.parents
+                                   if up in self.inlined_submodule_revmap
+                                   for item in self.inlined_submodule_revmap[up]]
+    self.debug('Downstream umbrella parents: %s' % downstream_umbrella_parents)
+
+    # Check submodules that were added or updated.  If their commits
+    # have parents not already included, add them.
+    submodule_upstream_parent_candidates = []
+    for pathsegs, oldhash, newhash in updated_submodules:
+      path='/'.join(pathsegs)
+
+      newcommit = self.fm.get_commit(newhash)
+
+      for p in newcommit.parents:
+        if p in self.new_upstream_hashes:
+          # This is a rewritten upstream commit.  Include this in the
+          # parent list to show which upstream commit the submodule
+          # merged in.  This might look a little strange in the
+          # history graph because there may be a merge shown from
+          # history that looks like it's already been merged.
+          # However, if this commit is an ancestor of history already
+          # merged in from another submodule, then the tree for the
+          # submodule will actually reflect the earlier commit, so it
+          # seems like a good idea to explicitly indicate that.
+          self.debug('Add submodule %s upstream parent %s' % (path, p))
+          parents.append(p)
+
+          # This code attempts to filter out such parents.
+          #self.debug('Add upstream parent candidate %s from submodule %s add or update' %
+          #           (p, path))
+          #submodule_upstream_parent_candidates.append((p, path))
+          continue
+
+        # This submodule parent is a monorepo-rewritten downstream
+        # commit.
+        #
+        # Check to see if this submodule parent was incorporated
+        # into the umbrella, either inlined directly or transitively
+        # via one of this commit's parents.
+        maybe_descendent = self.is_same_or_ancestor_of_any(p, downstream_umbrella_parents)
+        if maybe_descendent:
+          self.debug('Filtering submodule %s downstream parent %s which is ancestor of inlined %s' %
+                     (path, p, maybe_descendent))
+          # Remember this as it might be a descendent of an upstream
+          # parent candidate.
+          rewritten_or_upstream_parents.append(maybe_descendent)
+          continue
+
+        self.debug('Add downstream parent %s from submodule %s add or update' %
+                   (p, path))
+        parents.append(p)
+
+    # Now we have a list of submodule parents that are rewritten
+    # upstream commits.  These must have a total order.  Find the
+    # latest one.
+    #
+    # This bit doesn't actually run unless the upstream parent
+    # filtering code above is enabled, since
+    # submodule_upstream_parent_candidates will always be empty.
+    if submodule_upstream_parent_candidates:
+      latest_upstream = self.get_latest_upstream_commit(githash, submodules,
+                                                        submodule_upstream_parent_candidates)
+      if not latest_upstream:
+        raise Exception('No total order of submodule upstream parents %s\n' %
+                        submodule_upstream_parent_candidates)
+
+      self.debug('Latest submodule upstream parent %s' % latest_upstream)
+
+      maybe_descendent = self.is_same_or_ancestor_of_any(latest_upstream,
+                                                         rewritten_or_upstream_parents)
+      if maybe_descendent:
+        self.debug('Filtering latest upstream parent %s which is ancestor of umbrella parent %s' %
+                   (latest_upstream, maybe_descendent))
+      else:
+        # This is an upstream parent not already covered by existing
+        # parents.  Add it.
+        self.debug('Add latest submodule parent %s' % latest_upstream)
+        parents.append(latest_upstream)
+
+    self.debug('New parents: %s' % parents)
+    return parents
+
+  def get_commit_message(self, githash, commit, oldparents, submodules,
+                         updated_submodules):
+    if self.no_rewrite_commit_msg:
+      return commit.msg
+
+    if len(updated_submodules) == 1:
+      # We only updated on submodule.  This commit will be inlined so
+      # use the submodule commit's message.
+      pathsegs, oldhash, newhash = updated_submodules[0]
+      newcommit = self.fm.get_commit(newhash)
+      return newcommit.msg
+
+    # We updated zero or more than one submodule.  Include the
+    # original umbrella commit to avoid confusion with log --oneline
+    # listings, which would show two commits with the same subject
+    # otherwise.
+    newmsg = commit.msg
+    for pathsegs, oldhash, newhash in updated_submodules:
+      newcommit = self.fm.get_commit(newhash)
+      newmsg = newmsg + '\n' + newcommit.msg
+
+    self.debug('Updating commit message to:\n %s\n' % newmsg)
+    return newmsg
+
+  def get_author_info(self, commit, updated_submodules):
+    if len(updated_submodules) == 1:
+      # We only updated or added one submodule.  If we're re-writing
+      # commit messages, take author, committer and date information
+      # from the original commit.  If multiple submodules are updated,
+      # take the author, committer and date information from the
+      # umbrella commit.
+      if not self.no_rewrite_commit_msg:
+        pathsegs, oldhash, newhash = updated_submodules[0]
+        self.debug('Updating author and commiter info from %s' % newhash)
+        newcommit = self.fm.get_commit(newhash)
+
+        commit.author         = newcommit.author
+        commit.author_date    = newcommit.author_date
+        commit.committer      = newcommit.committer
+        commit.committer_date = newcommit.committer_date
+    return commit
+
+  def rewrite_tree(self, githash, commit, base_tree, submodules):
+    # Remove submodules from the base tree.
+    self.debug('Removing submomdules from the base tree')
+    base_tree = self.remove_submodules(base_tree, (x[0] for x in submodules), '.')
+
+    umbrella_is_rewritten_downstream_commit = False
+    if githash in self.revmap:
+      umbrella_is_rewritten_downstream_commit = True
+
+    # If the umbrella commit is actually a rewritten downstream
+    # commit, then a subproject had submodules added to it.  If so,
+    # the base tree is from that commit and already had submodules
+    # removed.
+
+    if not umbrella_is_rewritten_downstream_commit:
+      # This is a "proper" umbrella commit composed of submodules
+      # along with possibly other tree entries not related to
+      # submodules.  We need to put the non-submodule pieces under
+      # subdir.
+
+      # Remove submodules from the commit tree.
+      self.debug('Removing submomdules from the proper umbrella commit tree')
+      commit_tree = commit.get_tree_entry()
+      commit_tree = self.remove_submodules(commit_tree, (x[0] for x in submodules), '.')
+
+      # Rewrite the remaining bits under subdir in the base tree.
+      self.debug('Rewrite non-submodule entries')
+      pathsegs = self.subdir.split('/')
+      base_tree = base_tree.add_path(self.fm, pathsegs, commit_tree)
+
+    # Add the submodule trees to the commit, overwriting whatever
+    # might already be there.  We prefer the tree to represent the
+    # submodule state of the original umbrella commit.
+    for pathsegs, oldhash in submodules:
+      path='/'.join(pathsegs)
+
+      # Get the hash of the monorepo-rewritten commit corresponding to
+      # the submodule update.
+      newhash = self.revmap.get(oldhash, oldhash)
+      newcommit = self.fm.get_commit(newhash)
+
+      # Map the path in the umbrella history to the path in the
+      # monorepo.
+      upstream_path = self.submodule_map.get(path)
+
+      if not upstream_path:
+        upstream_path = path
+      upstream_segs = upstream_path.split('/')
+
+      submodule_tree = newcommit.get_tree_entry().get_path(self.fm,
+                                                           upstream_segs)
+
+      if not submodule_tree:
+        # This submodule doesn't exist in the monorepo, add the
+        # entire contents of the commit's tree.
+        submodule_tree = newcommit.get_tree_entry()
+
+      # Remove submodules from this submodule.  Be sure to remove
+      # upstrem_segs from the beginning of submodule paths, since that
+      # path prefix is what got us to the submodule in the first
+      # place.
+      self.debug('Removing submomdules from submodule %s' % path)
+      subpaths = ('/'.join(x[0]) for x in submodules)
+      prefix = path + '/'
+      subpaths = (x[x.startswith(prefix) and len(prefix):] for x in subpaths)
+      subpaths = (x.split('/') for x in subpaths)
+      submodule_tree = self.remove_submodules(submodule_tree, subpaths, path)
+
+      self.debug('Writing submodule %s %s to base tree' % (path, newhash))
+      base_tree = base_tree.add_path(self.fm, upstream_segs, submodule_tree)
+
+    base_tree.write_subentries(self.fm)
+    commit.treehash = base_tree.githash
+
+    for name, e in base_tree.get_subentries(self.fm).iteritems():
+      self.debug('NEWTREE: %s %s' % (name, str(e)))
+
+    return commit
 
   def zip_filter(self, fm, githash, commit, oldparents):
     """Rewrite an umbrella branch with interleaved commits
@@ -570,353 +868,53 @@ class Zipper:
     newparents = commit.parents
 
     submodules = self.find_submodules(commit, githash)
-    if not submodules:
-      # No submodules imported yet.
-      self.debug('No submodules yet - rewrite\n')
-      newtree = self.rewrite_tree(commit.get_tree_entry(), self.subdir)
-      newtree.write_subentries(self.fm)
-      commit.treehash = newtree.githash
-      return commit
 
-    # The content of the commit should be the combination of the
-    # content from the submodules and elements from the monorepo tree
-    # not updated by submodules.  The tricky part is figuring out
-    # which monorepo tree that should be.
-    #
-    # Start by assuming our upstream tree will be from the previous
-    # umbrella rewrite, if there was one.
-    #
-    umbrella_merge_bases = []  # Hashes of upstream merge-bases from
-                               # umbrella commits.
-
-    for op in oldparents:
-      self.debug('Checking umbrella parent %s for merge base' % op)
-      parent_merge_base = self.umbrella_merge_base.get(op)
-      if parent_merge_base:
-        self.debug('Adding parent merge base %s to merge base set' % parent_merge_base)
-        umbrella_merge_bases.append([parent_merge_base, '.'])
-      mapped_op = self.revmap.get(op)
-      if mapped_op:
-        # The umbrella commit itself has a monorepo-rewritten parent.
-        # This can happen if submodules were added to an upstream
-        # project.
-        self.debug('Adding monorepo parent %s to merge base set' % mapped_op)
-        umbrella_merge_bases.append([mapped_op, '.'])
-
-    # Rewrite existing new parents.  If the umbrella is actually an
-    # upstream project that's had submodules added to it, then this
-    # commit and its parents are actually split commits, not monorepo
-    # commits.
-    rewritten_newparents = []
-    for np in newparents:
-      mapped_np = self.revmap.get(np)
-      if mapped_np:
-        rewritten_newparents.append(mapped_np)
-      else:
-        rewritten_newparents.append(np)
-    commit.parents = rewritten_newparents
-    newparents = rewritten_newparents
-
-    prev_submodules_map = {}
-
-    # Track the old hashes for submodules so we know which
-    # submodules this commit updated below.
-
-    # FIXME prev_submodules needs to be mapped by githash and checked
-    # from oldparents to handle branches in the umbrella.
-    for prev_submodule_pathsegs, prev_submodule_hash in self.prev_submodules:
-      prev_submodules_map['/'.join(prev_submodule_pathsegs)] = prev_submodule_hash
-
-    self.prev_submodules = submodules
-
-    new_commit_msg = ''
-    if self.no_rewrite_commit_msg:
-      new_commit_msg = commit.msg
-
-    submodule_hash = {}
-
-    # For each submodule, get the corresponding monorepo-rewritten
-    # commit.  Figure out which monorepo tree to use as the base for
-    # the new zipped commit.  For each submodule commit, examine its
-    # parents.  If it more than one parent, the other parents may be
-    # from the upstream monorepo, which would represent a merge from
-    # upstream history and a potential new merge-base for the current
-    # zip history.
-    #
-    # Given all of the parents of all of the submodule commits,
-    # determine which one has the most recent content from upstream
-    # and use its tree as the base for the new commit.
-    #
-    commits_to_check = umbrella_merge_bases  # Hashes of candidate
-                                             # commits for the base
-                                             # upstream tree.
-
-    for pathsegs, oldhash in submodules:
-      path='/'.join(pathsegs)
-      self.debug('Found submodule (%s, %s)' % (path, oldhash))
-
-      # Get the hash of the monorepo-rewritten commit corresponding to
-      # the submodule update.
-      newhash = self.revmap.get(oldhash, oldhash)
-      self.debug('New hash: %s' % newhash)
-      submodule_hash[path] = newhash
-
-      if newhash in self.new_upstream_hashes:
-        self.debug("Upstream submodule update to %s\n" % newhash)
-        commits_to_check.append([newhash, path])
-
-      newcommit = self.fm.get_commit(newhash)
-      self.debug('%s\n' % newcommit.msg)
-
-      for parent in newcommit.parents:
-        if parent in self.new_upstream_hashes:
-          # This submodule has an upstream parent.
-          self.debug("Upstream parent %s\n" % parent)
-          commits_to_check.append([parent, path])
-
-    # Check to see if this commit is actually a monorepo-rewritten
-    # commit.  If it is, use it as the merge base.  This happens if an
-    # upstream project hash submodules added to it on a branch and
-    # there's a merge from upstream to that branch.  The merge result
-    # is what we want for everything except the submodules.
-    umbrella_merge_base_hash = None
-    mapped_githash = self.revmap.get(githash)
-    if mapped_githash:
-      self.debug('Using mapped umbrella commit %s as merge base' % mapped_githash)
-      umbrella_merge_base_hash = mapped_githash
-    else:
-      umbrella_merge_base_hash = self.get_latest_upstream_commit(githash,
-                                                                 submodules,
-                                                                 commits_to_check)
-      if not umbrella_merge_base_hash:
-        raise Exception('Umbrella merge and umbrella is not an upstream project')
-
-    # Record our choice so children can find it.
-    self.umbrella_merge_base[githash] = umbrella_merge_base_hash
-
-    newtree = commit.get_tree_entry()
-
-    # First, remove all submodule updates.  We don't want to rewrite
-    # these under subdir.
-    newtree = self.remove_submodules(newtree, (x[0] for x in submodules), '.')
-
-    # Rewrite the non-submodule-update portions of the tree under
-    # subdir.
-    self.debug('Rewrite non-submodule entries\n')
-    newtree = self.rewrite_tree(newtree, self.subdir)
-
-    # Write the umbrella merge-base into the tree.
-    if umbrella_merge_base_hash:
-      umbrella_merge_base_commit = self.fm.get_commit(umbrella_merge_base_hash)
-
-      umbrella_merge_base_tree = umbrella_merge_base_commit.get_tree_entry()
-      for name, entry in umbrella_merge_base_tree.get_subentries(self.fm).items():
-        newtree.add_entry(self.fm, name, entry)
-
-    # Import trees from commits pointed to by the submodules.  We
-    # assume the trees should be placed in the same paths the
-    # submodules appear.
-    submodule_add_parents = []      # Parents due to a "submodule add"
-                                    # or update operation
-    updated_submodule_hashes = []   # Rewritten commit hash of updated
-                                    # submodules
-    new_submodules = []             # Submodules we added in this commit
-    for pathsegs, oldhash in submodules:
-      path='/'.join(pathsegs)
-
-      # Get the hash of the monorepo-rewritten commit corresponding to
-      # the submodule update.
-      newhash = submodule_hash[path]
-      newcommit = self.fm.get_commit(newhash)
-
-      # Map the path in the umbrella history to the path in the
-      # monorepo.
-      upstream_path = self.submodule_map.get(path)
-      if not upstream_path:
-        upstream_path = path
-      upstream_segs = upstream_path.split('/')
-
-      submodule_tree = newcommit.get_tree_entry().get_path(self.fm,
-                                                           upstream_segs)
-
-      if not submodule_tree:
-        # This submodule doesn't exist in the monorepo, add the
-        # entire contents of the commit's tree.
-        submodule_tree = newcommit.get_tree_entry()
-
-      # Remove submodules from this submodule.  Be sure to remove
-      # upstrem_segs from the beginning of submodule paths, since that
-      # path prefix is what got us to the submodule in the first
-      # place.
-      subpaths = ('/'.join(x[0]) for x in submodules)
-      prefix = path + '/'
-      subpaths = (x[x.startswith(prefix) and len(prefix):] for x in subpaths)
-      subpaths = (x.split('/') for x in subpaths)
-      submodule_tree = self.remove_submodules(submodule_tree, subpaths, path)
-
-      # FIXME: Should we always take the latest version of the
-      # upstream tree when a submodule is updated to an upstream
-      # commit?  Uncommenting the following will do that.
-      #
-      # Without the following we will respect the submodule update and
-      # set the tree to the referenced commit, even if it means moving
-      # the tree for that subdirectory "backwards" from where it is in
-      # the upstream linear history relative to other imported
-      # submodules.
-      #
-      # This seems like an ok thing to do since it represents the
-      # umbrella history more accurately and it's likely that any
-      # submodules added to the umbrella were done in a coordinated
-      # fashion and we should respect that.
-      #
-      # If we're importing a commit from upstream, don't rewrite it,
-      # as the umbrella_merge_base_tree has it.
-      #if newhash not in self.new_upstream_hashes:
-        # Update the tree for the subproject from the commit referenced
-        # by the submodule update, overwriting any existing tree for the
-        # subproject.
-
-      # Put this under the aboe if to not rewrite submodule trees from
-      # upstrem.
-      newtree = newtree.add_path(self.fm, upstream_segs, submodule_tree)
-
-      prev_submodule_hash = None
-      if path in prev_submodules_map:
-        prev_submodule_hash = prev_submodules_map[path]
-
-      if prev_submodule_hash != oldhash:
-        if prev_submodule_hash:
-          self.debug("Updated %s to %s (new %s)\n" % (path, oldhash, newhash))
-          updated_submodule_hashes.append(newhash)
-
-        if not self.no_rewrite_commit_msg:
-          if not new_commit_msg:
-            new_commit_msg = newcommit.msg
-          else:
-            new_commit_msg += '\n' + newcommit.msg
-
-      if path not in self.added_submodules:
-        self.debug('Add new submodule %s' % path)
-        updated_submodule_hashes.append(newhash)
-        new_submodules.append(newhash)
-
-      # Rewrite parents.
-      if path not in self.added_submodules or (prev_submodule_hash != oldhash and prev_submodule_hash):
-        self.debug("Adding submodule parents for %s" % path)
-        # We either added or updated a submodule.  Add parents of the
-        # submodule commit if they are not from upstream.  If they are
-        # from upstream they will be parented (possibly transitively)
-        # through umbrella_merge_base_hash below.
-        for submodule_parent in newcommit.parents:
-          if submodule_parent in self.new_upstream_hashes:
-            # This should have been merged as part of
-            # umbrella_merge_base_hash.
-            if not self.is_same_or_ancestor(submodule_parent, umbrella_merge_base_hash):
-              raise Exception('Submodule parent %s in new upstream set not an ancestor of merge base %s' %
-                              (submodule_parent, umbrella_merge_base_hash))
-            self.debug('Filtering submodule %s upstream parent %s' %
-                       (path, submodule_parent))
-            continue
-
-          # This submodule parent is a monorepo-rewritten downstream
-          # commit.
-
-          # Check to see if this submodule parent was incorporated
-          # into the umbrella, either inlined directly or transitively
-          # via one of this commit's parents.
-          downstream_umbrella_parents = [item
-                                         for p in newparents
-                                         if p in self.inlined_submodule_revmap
-                                         for item in self.inlined_submodule_revmap[p]]
-          self.debug('Downstream umbrella parents: %s' % downstream_umbrella_parents)
-          if self.is_same_or_ancestor_of_any(submodule_parent,
-                                             downstream_umbrella_parents):
-            self.debug('Filtering submodule %s parent %s which is ancestor of inlined %s' %
-                       (path, submodule_parent, downstream_umbrella_parents))
-            continue
-
-          self.debug('Add parent %s from submodule %s add or update' %
-                     (submodule_parent, path))
-          submodule_add_parents.append(submodule_parent)
-
-      self.added_submodules.add(path)
+    updated_submodules = self.get_updated_or_added_submodules(githash, commit,
+                                                              oldparents,
+                                                              submodules)
 
     if not oldparents:
       # This is the first commit in the umbrella.
       self.debug('First umbrella commit')
-      if len(new_submodules) == 1:
-        self.debug('Added a single submodule')
-        if len(self.added_submodules) == 1:
-          self.debug('Added submodule is only submodule')
-          if len(updated_submodule_hashes) != 1:
-            raise Exception('Added one new submodule but not exactly one updated hash?')
-          # We've added exactly one submodule.
-          subhash = updated_submodule_hashes[0]
-          if subhash in self.new_upstream_hashes:
-            # The submodule commit is from upstream.  Just return the
-            # upstream commit as-is.  This avoids duplicated a commit,
-            # which would happen since the parent of the new commit
-            # would be set to subhash.
-            self.debug('Single submodule upstream import, return commit %s' % subhash)
-            self.merged_upstream_parents.add(subhash)
-            # Tell children of githash that we used a base tree from
-            # subhash.
-            self.umbrella_merge_base[githash] = subhash
-            return self.fm.get_commit(subhash)
+      if len(updated_submodules) == 1:
+        pathsegs, oldhash, newhash = updated_submodules[0]
+        if newhash in self.new_upstream_hashes:
+          # The submodule commit is from upstream.  Just return the
+          # upstream commit as-is.  This avoids duplicated a commit,
+          # which would happen since the parent of the new commit
+          # would be set to subhash.
+          self.debug('Single submodule upstream import, return commit %s' % newhash)
+          self.merged_upstream_parents.add(newhash)
+          # Tell children of githash that we used a base tree from
+          # subhash.
+          self.base_tree_map[githash] = newhash
+          return self.fm.get_commit(newhash)
 
-    if len(updated_submodule_hashes) == 1:
-      # We only updated or added one submodule.  If we're re-writing
-      # commit messages, take author, committer and date information
-      # from the original commit.  If multiple submodules are updated,
-      # take the author, committer and date information from the
-      # umbrella commit.
-      if not self.no_rewrite_commit_msg:
-        subhash = updated_submodule_hashes[0]
-        self.debug('Updating author and commiter info from %s' % subhash)
-        newcommit = self.fm.get_commit(subhash)
+    # Determine the base tree.
+    base_tree_commit_hash = self.get_base_tree_commit_hash(fm, githash, commit,
+                                                           oldparents, submodules)
 
-        commit.author         = newcommit.author
-        commit.author_date    = newcommit.author_date
-        commit.committer      = newcommit.committer
-        commit.committer_date = newcommit.committer_date
-    else:
-      # We updated multiple submodules or none at all.  Prepend the
-      # umbrella commit message to avoid confusing this commit with
-      # the commit that has the same message as the first message
-      # appended to new_commit_msg.
-      if not new_commit_msg:
-        new_commit_msg = commit.msg
-      else:
-        new_commit_msg = commit.msg + '\n' + new_commit_msg
+    # Record our choice so children can find it.
+    self.base_tree_map[githash] = base_tree_commit_hash
 
-    upstream_parents = []  # Parents due to merges from upstream
+    base_tree_commit = fm.get_commit(base_tree_commit_hash)
+    base_tree = base_tree_commit.get_tree_entry()
 
-    # Add umbrella_merge_base as a parent if it's a descendent of all
-    # previously merged upstream commits.
-    if umbrella_merge_base_hash in self.new_upstream_hashes:
-      if umbrella_merge_base_hash not in self.merged_upstream_parents:
-        if self.list_is_ancestor(self.merged_upstream_parents, umbrella_merge_base_hash):
-          # The new merge-base is newer than all previously-merged
-          # upstream parents, so add an edge to it.
-          self.debug('Add upstream merge parent %s' % umbrella_merge_base_hash)
-          upstream_parents.append(umbrella_merge_base_hash)
-          self.merged_upstream_parents.add(umbrella_merge_base_hash)
+    commit = self.rewrite_tree(githash, commit, base_tree, submodules)
 
-    newtree.write_subentries(fm)
-    commit.treehash = newtree.githash
+    # Rewrite parents.
+    commit.parents = self.determine_parents(fm, githash, commit, oldparents,
+                                            submodules, updated_submodules)
 
-    for name, e in newtree.get_subentries(fm).iteritems():
-      self.debug('NEWTREE: %s %s' % (name, str(e)))
 
-    commit.parents.extend(submodule_add_parents)
-    commit.parents.extend(upstream_parents)
+    commit.msg = self.get_commit_message(githash, commit, oldparents,
+                                         submodules, updated_submodules)
 
-    self.debug('Updating commit message to:\n %s\n' % new_commit_msg)
-    commit.msg = new_commit_msg
+    commit = self.get_author_info(commit, updated_submodules)
 
     return (commit,
-            lambda newhash,updated_submodules = updated_submodule_hashes, oldhash = githash:
-            self.record_mappings(newhash, oldhash, updated_submodules))
+            lambda newhash, changed_submodules = updated_submodules, oldhash = githash:
+            self.record_mappings(newhash, oldhash, changed_submodules))
 
   def run(self):
     if not self.revmap_in_file:
