@@ -496,6 +496,14 @@ class Zipper:
     self.debug('Mapping umbrella %s to %s' % (oldhash, newhash))
     self.umbrella_revmap[oldhash] = newhash
 
+    # Map the submodule commit to the new zipped commit so we can
+    # update tags.
+    self.debug('Updated submodules %s' % updated_submodules)
+    for pathsegs, oldshash, newshash in updated_submodules:
+      path = '/'.join(pathsegs)
+      self.debug('Mapping submodule %s %s to %s' % (path, newshash, newhash))
+      self.submodule_revmap[newshash] = newhash
+
     return None
 
   def get_base_tree_commit_hash(self, fm, githash, commit, oldparents, submodules):
