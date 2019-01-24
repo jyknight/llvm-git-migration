@@ -87,13 +87,11 @@
 # With --revmap-out=<file> the tool will dump a map from original
 # umbrella commit hash to rewritten umbrella commit hash.
 #
-# On the rewriting of trees:
+# On the rewriting of trees and parents:
 #
-# If a downstream commit merged in an upstream commit, parents for the
-# "inlined" submodule update are rewritten correctly.  The tool takes
-# care to preserve the proper history for upstream monorepo bits that
-# do not participate in the submodule process.  For example, say the
-# umbrella history looks like this:
+# The tool takes care to preserve the proper history for upstream
+# monorepo bits that do not participate in the submodule process.  For
+# example, say the umbrella history looks like this:
 #
 #   *   (HEAD -> umbrella/master) Update submodule clang to FOO
 #   |
@@ -123,21 +121,25 @@
 #   |/
 #   *   Do commit BAZ in compiler-rt
 #   |
+#   *   Do commit QUUZ in clang
+#   |
 #   |  *   (HEAD -> monorepo-clang/local) Do commit FOO in clang
 #   |  |
 #   | /
 #   |/
-#   *   Do commit QUX in compiler-rt
+#   *   Do commit QUUX in compiler-rt
+#   |
+#   *   (tag: llvmorg-10.0.0) Do commit GARPLY in clang
 #   |
 #
 # The commits from compiler-rt come from upstream (no local work
 # exists for compiler-rt) but commits BAR and BAZ exist in local
-# histories for llvm and compiler-rt which were rewritten against the
+# histories for llvm and clang which were rewritten against the
 # upstream monorepo (i.e. they are in branches off monorepo/master or
 # some other point).
 #
-# A naive processing of parents would leave us with something like
-# this in the zipped history:
+# The tool rewrites parents to indicate which tree was used for an
+# inlined submodule commit:
 #
 #   *   (HEAD -> monorepo/master) Do commit XYZZY in lld
 #   |
@@ -148,28 +150,41 @@
 #   |/    |
 #   *     |   Do commit BAZ in compiler-rt
 #   |    /
-#   |   /
+#   *   /   Do commit QUUZ in clang
 #   |  /
 #   | /
 #   |/
-#   *   Do commit QUX in compiler-rt
+#   *   Do commit QUUX in compiler-rt
+#   |
+#   *   (tag: llvmorg-10.0.0) Do commit GARPLY in clang
 #   |
 #
-# Not only is the edge from compiler-rt/QUX to zip/master redundant
-# (it was supposedly merged along with compiler-rt/BAZ), the tree from
-# compiler-rt could be written incorrectly, resulting in
-# compiler-rt/QUX at zip/master rather than the proper
-# compiler-rt/BAZ.  This is because monorepo-clang/FOO incorpates the
-# tree from compiler-rt/QUX
+# The edge from compiler-rt/QUUX to zip/master appears redundant (it
+# was supposedly merged along with compiler-rt/BAZ).  However,
+# according to the submodule history, clang/FOO should be paired with
+# llvm/BAR.  clang/FOO is based on clang/GARPLY and any files not
+# touched by clang/FOO will reflect their state at clang/GARPLY, not
+# their state at clang/QUUZ.  Therefore, the tool keeps the edge from
+# compiler-rt/QUUX as a visual reminder of the state of the tree.  The
+# script favors preserving submodule updates and their trees as they
+# appeared in the umbrella history rather than trying to merge local
+# changes into the latest version of a tree.
+#
+# The tool does take care to correct write trees for subprojects not
+# participating in the umbrella history.  Given the above graph, a
+# naive tree rewriting would result in compiler-rt being written
+# incorrectly, resulting in compiler-rt/QUUX at zip/master rather than
+# the proper compiler-rt/BAZ.  This is because monorepo-clang/FOO
+# incorpates the tree from compiler-rt/QUUX
 #
 # The script attempts to get this right by tracking the most recent
-# merge-base from the monorepo along each zipped branch.  If a
-# submodule update brings in an older tree from the monorepo, that
-# tree is discarded in favor of the merge-base.  Otherwise the
-# merge-base is updated to point to the new tree.  This means that the
-# script assumes there is a total topological ordering among upstream
-# commits brought in via submodule updates.  For example, the script
-# will abort if trying to create a history like this:
+# upstream commit that has been merged from the monorepo along each
+# zipped branch.  If a submodule update brings in an older tree from
+# the monorepo that doesn't participate in submodule history, that
+# tree is discarded in favor of the more recent tree.  This means that
+# the script assumes there is a total topological ordering among
+# upstream commits brought in via submodule updates.  For example, the
+# script will abort if trying to create a history like this:
 #
 #         *  (HEAD -> zip/master)
 #        /|
@@ -194,22 +209,54 @@
 # (compiler-rt, etc.).  In this case the script aborts with an error
 # indicating the commit would create such a merge point.
 #
-# Note that the content appearing in subprojects will always reflect
-# the tree found in the commit pointed to by the corresponding
-# submodule.  This means that some subprojects may appear "older" in
-# the resulting tree.  In the example above, clang/FOO came from a
-# topologically earlier commit than llvm/BAR and the clang sources
-# will be older than that of any other clang commits that may appear
-# between clang/FOO and llvm/BAR.  The script favors preserving
-# submodule updates as they appeared in the umbrella history under the
-# assumption that subprojects were merged from upstream in lockstep.
+# On the rewriting of tags
+#
+# With the --update-tags option, the script will rewrite any tags
+# pointing to inlined submodule commits to point at the new inlined
+# commit.  No attempt is made to distinguish upstream tags from local
+# tags.  Therefore, rewriting could be surprising, as in this example:
+#
+#   *   (HEAD -> umbrella/master) Update submodule clang to FOO
+#   |
+#   *   Update submodule llvm to BAR
+#   |
+#   |  *   (HEAD -> llvm/local) Do commit BAR in llvm
+#   |  |
+#   |  |     *   (HEAD -> clang/local) Do commit FOO in clang
+#   |  |     |
+#   *  |     |        Downstream umbrella work
+#   |  |     |
+#     llvm  clang
+#
+#   *   (HEAD -> monorepo/master) Do commit XYZZY in lld
+#   |
+#   |  *   (HEAD -> zip/master) (tag: llvmorg-10.0.0) Update to clang/GARPLY
+#   |  |\
+#   |  * \   Do commit BAR in llvm
+#   | /   |
+#   |/    |
+#   *     |   Do commit BAZ in compiler-rt
+#   |     |
+#   *     |  Do commit QUUZ in clang
+#   |    /
+#   |   /
+#   |  /
+#   * /   Do commit QUUX in compiler-rt
+#   |/
+#   *   Do commit GARPLY in clang (previously tagged llvmorg-10.0.0)
+#   |
+#
+# The umbrella pulled in a commit directly from upstream which
+# happened to have a tag associated with it and so when it was inlined
+# into the zipped history with --update-tags, the tag was rewritten to
+# point to the inlined commit.  This is almost certainly not what is
+# wanted, which is why rewriting tags is an optional feature.
+# However, this is probably an uncommon occurrence and it is generally
+# safe and correct to use --update-tags.  If upstream tags happen to
+# be rewritten it is always possible to move the tag back to its
+# correct location.
 #
 # TODO/Limitations:
-#
-# - Nested submodules aren't handled yet.  If one of your submodules
-#   contains a nested submodule (e.g. clang in llvm/tools/clang where
-#   llvm is itself a submodule containing submodule clang), the tool
-#   will not find the clang submodule.
 #
 # - The script requires a history with submodule updates.  It should
 #   be fairly straightforward to enhance the script to take a revlist
@@ -230,13 +277,6 @@
 #   was removed), the subproject tree is taken from the upstream
 #   monorepo tree just as it is for upstream projects not
 #   participating in the umbrella history.
-#
-# - Subproject tags are not rewritten.  Because the subproject commits
-#   themselves are not rewritten (only the commits in the umbrella
-#   history are rewritten), any downstream tags pointing to them won't
-#   be updated to point to the zipped history.  We could provide this
-#   capability if we updated the revmap entry for subproject commits
-#   to point to the corresponding zipped commit during filtering.
 #
 import argparse
 import fast_filter_branch
@@ -569,7 +609,7 @@ class Zipper:
                                              commits_to_check)
 
     if not result:
-      raise Exception('Umbrella merge and umbrella is not an upstream project')
+      raise Exception('Umbrella incorprated submodules from multiple monorepo branches')
 
     self.debug('Using commit %s as base tree' % result)
 
