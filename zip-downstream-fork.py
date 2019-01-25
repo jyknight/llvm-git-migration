@@ -307,9 +307,6 @@ class Zipper:
     self.revmap_out_file           = revmap_out_file
     self.reflist                   = reflist
     self.new_upstream_hashes       = set()
-    self.added_submodules          = set() # Submodules added so far.
-                                           # FIXME: Index by old
-                                           # umbrella parent.
     self.merged_upstream_parents   = {} # Latest merged upstream
                                         # parents for each submodule,
                                         # indexed by old umbrella
@@ -322,10 +319,9 @@ class Zipper:
                                         # commit hash to new
                                         # downstream commit hash.
     self.dbg                       = debug
-    self.prev_submodules           = [] # Most-recently-merged commit
-                                        # of each submodule.  FIXME:
-                                        # Index by old umbrella
-                                        # parents.
+    self.prev_submodules           = {} # Most-recently-merged commit
+                                        # of each submodule, indexed
+                                        # by old umbrella parents.
     self.abort_bad_submodule       = abort_bad_submodule
     self.no_rewrite_commit_msg     = no_rewrite_commit_msg
     self.subdir                    = subdir
@@ -615,41 +611,45 @@ class Zipper:
 
     return result
 
+  def submodule_was_added_or_updated(self, oldparents, submodule_path,
+                                     submodule_oldhash):
+    """Return whether submodule_oldhash represents an addition of a new
+       submodule or an update of an existing submodule."""
+
+    # If submodule_oldhash matches any submodule along oldparents,
+    # this is not a submodule add or update.
+    for op in oldparents:
+      prev_submodules_map = self.prev_submodules.get(op)
+      if prev_submodules_map:
+        prev_submodule_hash = prev_submodules_map.get(submodule_path)
+        if prev_submodule_hash and prev_submodule_hash == submodule_oldhash:
+          return False
+
+    return True
+
   def get_updated_or_added_submodules(self, githash, commit, oldparents,
                                       submodules):
+    """Return a list of (submodule, oldhash, newhash) for each submodule
+       that was newly added or updated in this commit."""
     prev_submodules_map = {}
 
-    # Track the old hashes for submodules so we know which
-    # submodules this commit updated below.
-
-    # FIXME prev_submodules needs to be mapped by githash and checked
-    # from oldparents to handle branches in the umbrella.
-    for prev_submodule_pathsegs, prev_submodule_hash in self.prev_submodules:
-      prev_submodules_map['/'.join(prev_submodule_pathsegs)] = prev_submodule_hash
-
-    self.prev_submodules = submodules
+    for op in oldparents:
+      self.prev_submodules[op] = set()
 
     updated_submodules = []
     for pathsegs, oldhash in submodules:
       path='/'.join(pathsegs)
+      if self.submodule_was_added_or_updated(oldparents, path, oldhash):
 
-      # Get the hash of the monorepo-rewritten commit corresponding to
-      # the submodule update.
-      newhash = self.revmap.get(oldhash, oldhash)
-      newcommit = self.fm.get_commit(newhash)
-
-      prev_submodule_hash = None
-      if path in prev_submodules_map:
-        prev_submodule_hash = prev_submodules_map[path]
-
-      if path not in self.added_submodules or (prev_submodule_hash != oldhash and
-                                               prev_submodule_hash):
-        self.debug('Updated or added submodule %s to %s -> %s' %
-                   (path, oldhash, newhash))
+        # Get the hash of the monorepo-rewritten commit corresponding to
+        # the submodule update.
+        newhash = self.revmap.get(oldhash, oldhash)
         updated_submodules.append((pathsegs, oldhash, newhash))
-      self.added_submodules.add(path)
 
-    self.debug('Updated to added submodules: %s' % updated_submodules)
+    # Record the submodule state for this commit.
+    self.prev_submodules[githash] = submodules
+
+    self.debug('Updated or added submodules: %s' % updated_submodules)
     return updated_submodules
 
   def update_merged_parents(self, githash, submodules):
