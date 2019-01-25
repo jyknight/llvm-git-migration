@@ -170,7 +170,7 @@
 # appeared in the umbrella history rather than trying to merge local
 # changes into the latest version of a tree.
 #
-# The tool does take care to correct write trees for subprojects not
+# The tool takes care to correct write trees for subprojects not
 # participating in the umbrella history.  Given the above graph, a
 # naive tree rewriting would result in compiler-rt being written
 # incorrectly, resulting in compiler-rt/QUUX at zip/master rather than
@@ -209,6 +209,53 @@
 # (compiler-rt, etc.).  In this case the script aborts with an error
 # indicating the commit would create such a merge point.
 #
+# If there are downstream commits that are not inlined into the
+# zippped history (because submodule updates did not directly bring
+# them in), their parents will be rewritten to point to inlined
+# commits.  For example, given this umbrella history with llvm/GRAULT
+# not updated in the umbrella:
+#
+#   *   (HEAD -> umbrella/master) Update submodule clang to FOO
+#   |
+#   *   Update submodule llvm to BAR
+#   |
+#   |  *   (HEAD -> llvm/local) Do commit BAR in llvm
+#   |  |
+#   |  *   Do commit GRAULT in llvm
+#   |  |
+#   |  *   Do commit WALDO in llvm
+#   |  |
+#   |  |     *   (HEAD -> clang/local) Do commit FOO in clang
+#   |  |     |
+#   *  |     |        Downstream umbrella work
+#   |  |     |
+#     llvm  clang
+#
+# With the monorepo history from above, the zipped history will look
+# like this:
+#
+#   *   (HEAD -> monorepo/master) Do commit XYZZY in lld
+#   |
+#   |  *   (HEAD -> zip/master) Do commit FOO in clang
+#   |  |\
+#   |  * \   Do commit BAR in llvm
+#   |  |  |
+#   |  *  |   Do commit GRAULT in llvm
+#   |  |  |
+#   |  *  |   Do commit WALDO in llvm
+#   | /   |
+#   |/    |
+#   *     |   Do commit BAZ in compiler-rt
+#   |    /
+#   *   /   Do commit QUUZ in clang
+#   |  /
+#   | /
+#   |/
+#   *   Do commit QUUX in compiler-rt
+#   |
+#   *   (tag: llvmorg-10.0.0) Do commit GARPLY in clang
+#   |
+#
 # On the rewriting of tags
 #
 # With the --update-tags option, the script will rewrite any tags
@@ -216,7 +263,7 @@
 # commit.  No attempt is made to distinguish upstream tags from local
 # tags.  Therefore, rewriting could be surprising, as in this example:
 #
-#   *   (HEAD -> umbrella/master) Update submodule clang to FOO
+#   *   (HEAD -> umbrella/master) Get upstream clang/GARPLY
 #   |
 #   *   Update submodule llvm to BAR
 #   |
@@ -230,7 +277,7 @@
 #
 #   *   (HEAD -> monorepo/master) Do commit XYZZY in lld
 #   |
-#   |  *   (HEAD -> zip/master) (tag: llvmorg-10.0.0) Update to clang/GARPLY
+#   |  *   (HEAD -> zip/master) (tag: llvmorg-10.0.0) Getupstream clang/GARPLY
 #   |  |\
 #   |  * \   Do commit BAR in llvm
 #   | /   |
@@ -294,15 +341,20 @@ class Zipper:
   """Destructively zip a submodule umbrella repository."""
   def __init__(self, new_upstream_prefix, revmap_in_file, revmap_out_file,
                reflist, debug, abort_bad_submodule, no_rewrite_commit_msg,
-               subdir, submodule_map_file, update_tags, old_upstream_prefix):
+               subdir, submodule_map_file, update_tags, old_upstream_prefix,
+               downstream_prefix):
     if not new_upstream_prefix.endswith('/'):
       new_upstream_prefix = new_upstream_prefix + '/'
 
     if not old_upstream_prefix.endswith('/'):
       old_upstream_prefix = old_upstream_prefix + '/'
 
+    if not downstream_prefix.endswith('/'):
+      downstream_prefix = downstream_prefix + '/'
+
     self.new_upstream_prefix       = new_upstream_prefix
     self.old_upstream_prefix       = old_upstream_prefix
+    self.downstream_prefix         = downstream_prefix
     self.revmap_in_file            = revmap_in_file
     self.revmap_out_file           = revmap_out_file
     self.reflist                   = reflist
@@ -326,10 +378,16 @@ class Zipper:
     self.no_rewrite_commit_msg     = no_rewrite_commit_msg
     self.subdir                    = subdir
     self.base_tree_map             = {}
-    self.submodule_revmap          = {}
+    self.submodule_revmap          = {} # Map from new submodule
+                                        # commit hash to new umbrella
+                                        # commit hash/mark where it
+                                        # was inlined.
     self.umbrella_revmap           = {} # Map from old umbrella commit
                                         # hash to new umbrella commit
                                         # hash/mark.
+    self.umbrella_old_revmap       = {} # Map from new umbrella commit
+                                        # hash/mark to old umbrella
+                                        # commit hash.
     self.update_tags               = update_tags
 
     if submodule_map_file:
@@ -531,6 +589,7 @@ class Zipper:
     # Map the original commit to the new zippped commit.
     self.debug('Mapping umbrella %s to %s' % (oldhash, newhash))
     self.umbrella_revmap[oldhash] = newhash
+    self.umbrella_old_revmap[newhash] = oldhash
 
     # Map the submodule commit to the new zipped commit so we can
     # update tags.
@@ -884,6 +943,36 @@ class Zipper:
 
     return commit
 
+  def submodule_parent_filter(self, fm, monorepohash, commit, monorepoparents):
+    """Rewrite any parents of non-inlined submodule commits to point to
+    inlined submodule commits."""
+
+    # Don't mess with monorepo upstream commits.
+    if monorepohash in self.new_upstream_hashes:
+      return commit
+
+    # If this is an inlined submodule commit, just return it, no
+    # parent rewriting need be done.
+    if monorepohash in self.umbrella_old_revmap:
+      return commit
+
+    self.debug('--- commit %s' % monorepohash)
+    self.debug('%s\n' % commit.msg)
+
+    newparents = []
+    for mp in monorepoparents:
+      # Get the hash of the inlined submodule commit.  This is a
+      # rewritten umbrella commit.
+      newparent = self.submodule_revmap.get(mp, mp)
+      newparents.append(newparent)
+
+    if newparents != monorepoparents:
+      self.debug('Updating parents of %s from %s to %s' %
+                 (monorepohash, monorepoparents, newparents))
+      commit.parents = newparents
+
+    return commit
+
   def zip_filter(self, fm, githash, commit, oldparents):
     """Rewrite an umbrella branch with interleaved commits
 
@@ -1007,6 +1096,11 @@ class Zipper:
       fast_filter_branch.update_refs(self.fm, ['refs/tags'],
                                      self.submodule_revmap, None, None, None)
 
+    print "Rewriting local parents..."
+    fast_filter_branch.do_filter(commit_filter=self.submodule_parent_filter,
+                                 filter_manager=self.fm,
+                                 reflist=expand_ref_pattern([self.downstream_prefix]))
+
     self.fm.close()
     print "Done -- refs updated in-place."
 
@@ -1066,8 +1160,11 @@ Typical usage:
                       help="File containing a map from submodule path to monorepo path")
   parser.add_argument("--update-tags", action="store_true",
                       help="Update tags after filtering")
+  parser.add_argument("--downstream-prefix", metavar="REFNAME",
+                      default="refs/remotes/local",
+                      help="The prefix for all of the migrated refs of downstream forks (default: %(default)s)")
   args = parser.parse_args()
   Zipper(args.new_repo_prefix, args.revmap_in, args.revmap_out, args.reflist,
          args.debug, args.abort_bad_submodule, args.no_rewrite_commit_msg,
          args.subdir, args.submodule_map, args.update_tags,
-         args.old_repo_prefix).run()
+         args.old_repo_prefix, args.downstream_prefix).run()
