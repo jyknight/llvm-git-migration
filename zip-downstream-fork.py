@@ -610,7 +610,7 @@ class Zipper:
 
     # Check to see if this commit is actually a monorepo-rewritten
     # commit.  If it is, use it as the base tree.  This happens if an
-    # upstream project hash submodules added to it.
+    # upstream project has submodules added to it.
     mapped_githash = self.revmap.get(githash)
     if mapped_githash:
       self.debug('Using mapped umbrella commit %s as base tree' % mapped_githash)
@@ -996,7 +996,7 @@ class Zipper:
     umbrella history.
     """
 
-    # Don't mess with new upstream commits.
+    # Don't mess with monorepo upstream commits.
     if githash in self.new_upstream_hashes:
       return commit
 
@@ -1007,12 +1007,29 @@ class Zipper:
     if githash in self.old_upstream_hashes:
       return commit
 
+    submodules = self.find_submodules(commit, githash)
+
+    # If there are no submodules and this is a monorepo-rewritten
+    # commit, just return the new commit.  This happens if an upstream
+    # project is used as an umbrella (e.g. llvm contains a submodule
+    # in llvm/tools/clang) and local commits are made to it before
+    # adding submodules.
+    if not submodules:
+      newhash = self.revmap.get(githash)
+      if newhash:
+        newcommit = self.fm.get_commit(newhash)
+
+        # Tell children of githash that we used a base tree from
+        # newhash.
+        self.base_tree_map[githash] = newhash
+        self.update_merged_parents(githash, submodules)
+
+        return newcommit
+
     self.debug('--- commit %s' % githash)
     self.debug('%s\n' % commit.msg)
 
     newparents = commit.parents
-
-    submodules = self.find_submodules(commit, githash)
 
     updated_submodules = self.get_updated_or_added_submodules(githash, commit,
                                                               oldparents,
@@ -1030,7 +1047,7 @@ class Zipper:
           # would be set to subhash.
           self.debug('Single submodule upstream import, return commit %s' % newhash)
           # Tell children of githash that we used a base tree from
-          # subhash.
+          # newhash.
           self.base_tree_map[githash] = newhash
           self.update_merged_parents(githash, submodules)
           return self.fm.get_commit(newhash)
