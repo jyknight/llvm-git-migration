@@ -355,21 +355,16 @@ class Zipper:
   """Destructively zip a submodule umbrella repository."""
   def __init__(self, new_upstream_prefix, revmap_in_file, revmap_out_file,
                reflist, debug, abort_bad_submodule, no_rewrite_commit_msg,
-               subdir, submodule_map_file, update_tags, old_upstream_prefix,
-               downstream_prefix):
+               subdir, submodule_map_file, update_tags, old_upstream_prefix):
     if not new_upstream_prefix.endswith('/'):
       new_upstream_prefix = new_upstream_prefix + '/'
 
     if not old_upstream_prefix.endswith('/'):
       old_upstream_prefix = old_upstream_prefix + '/'
 
-    if not downstream_prefix.endswith('/'):
-      downstream_prefix = downstream_prefix + '/'
-
     # Options
     self.new_upstream_prefix   = new_upstream_prefix
     self.old_upstream_prefix   = old_upstream_prefix
-    self.downstream_prefix     = downstream_prefix
     self.revmap_in_file        = revmap_in_file
     self.revmap_out_file       = revmap_out_file
     self.reflist               = reflist
@@ -1431,4 +1426,4 @@ Typical usage:
   Zipper(args.new_repo_prefix, args.revmap_in, args.revmap_out, args.reflist,
          args.debug, args.abort_bad_submodule, args.no_rewrite_commit_msg,
          args.subdir, args.submodule_map, args.update_tags,
-         args.old_repo_prefix, args.downstream_prefix).run()
+         args.old_repo_prefix).run()
