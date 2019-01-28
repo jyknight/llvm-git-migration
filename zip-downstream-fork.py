@@ -256,6 +256,20 @@
 #   *   (tag: llvmorg-10.0.0) Do commit GARPLY in clang
 #   |
 #
+# Parent rewriting happens in two stages.  Stage1 updates the parents
+# of commits that were inlined into the zippped history.  Stage2
+# updates the parents of commits that were not inlined.  The reason
+# this must happen in two stages is that in stage1 we are traversing
+# the old umbrella history.  The only other commits we see are those
+# from the gitlinks pointing to submodule commits we want to inline
+# and we use the trees of those commits to get the right blobs into
+# the rewritten umbrella commits, effectively inlining the gitlinks.
+# The new umbrella commits are the only commits where we can update
+# parents in stage1.  In stage2, the new umbrella (zipped) commits now
+# have parents pointing to submodule commits that were not inlined
+# (thanks to the parent rewriting in stage1) and thus we will see
+# those commits in stage2 and can rewrite their parents.
+#
 # On the rewriting of tags
 #
 # With the --update-tags option, the script will rewrite any tags
@@ -352,43 +366,77 @@ class Zipper:
     if not downstream_prefix.endswith('/'):
       downstream_prefix = downstream_prefix + '/'
 
-    self.new_upstream_prefix       = new_upstream_prefix
-    self.old_upstream_prefix       = old_upstream_prefix
-    self.downstream_prefix         = downstream_prefix
-    self.revmap_in_file            = revmap_in_file
-    self.revmap_out_file           = revmap_out_file
-    self.reflist                   = reflist
-    self.new_upstream_hashes       = set()
-    self.merged_upstream_parents   = {} # Latest merged upstream
-                                        # parents for each submodule,
-                                        # indexed by old umbrella
-                                        # parent.
-    self.merged_downstream_parents = {} # Latest merged downstream
-                                        # parents for each submodule,
-                                        # indexed by old umbrella
-                                        # parent.
-    self.revap                     = {} # Map from old downstream
-                                        # commit hash to new
-                                        # downstream commit hash.
-    self.dbg                       = debug
-    self.prev_submodules           = {} # Most-recently-merged commit
-                                        # of each submodule, indexed
-                                        # by old umbrella parents.
-    self.abort_bad_submodule       = abort_bad_submodule
-    self.no_rewrite_commit_msg     = no_rewrite_commit_msg
-    self.subdir                    = subdir
-    self.base_tree_map             = {}
-    self.submodule_revmap          = {} # Map from new submodule
-                                        # commit hash to new umbrella
-                                        # commit hash/mark where it
-                                        # was inlined.
-    self.umbrella_revmap           = {} # Map from old umbrella commit
-                                        # hash to new umbrella commit
-                                        # hash/mark.
-    self.umbrella_old_revmap       = {} # Map from new umbrella commit
-                                        # hash/mark to old umbrella
-                                        # commit hash.
-    self.update_tags               = update_tags
+    # Options
+    self.new_upstream_prefix   = new_upstream_prefix
+    self.old_upstream_prefix   = old_upstream_prefix
+    self.downstream_prefix     = downstream_prefix
+    self.revmap_in_file        = revmap_in_file
+    self.revmap_out_file       = revmap_out_file
+    self.reflist               = reflist
+    self.dbg                   = debug
+    self.new_upstream_hashes   = set()
+    self.abort_bad_submodule   = abort_bad_submodule
+    self.no_rewrite_commit_msg = no_rewrite_commit_msg
+    self.subdir                = subdir
+    self.update_tags           = update_tags
+
+    # Filter state
+
+    # Latest merged upstream parents for each submodule, indexed by
+    # old umbrella parent.
+    self.merged_upstream_parents         = {}
+
+    # Latest merged downstream parents for each submodule, indexed by
+    # old umbrella parent.
+    self.merged_downstream_parents       = {}
+
+
+    # Map from old downstream commit hash to new downstream commit
+    # hash.
+    self.revap                           = {}
+
+
+    # Most-recently-merged commit of each submodule, indexed by old
+    # umbrella parents.
+    self.prev_submodules                 = {}
+
+    # Map from old umbrella commit to the upstream commit used for the
+    # base tree of the corresponding new commit.
+    self.base_tree_map                   = {}
+
+    # Map from old umbrella commit hash or original submodule commit
+    # to map from submodule path to the original submodule commit
+    # tree.  Used to determine which submodules were inlined into each
+    # umbrella commit.
+    self.submodule_tree_map              = {}
+
+    # Set of hashes of monorepo commits inlined into umbrella commits.
+    self.inlined_submodule_commits       = set()
+
+    # Map from original downstream or umbrella commit to its final
+    # commit in the zippped history.  Used for rewriting tags.
+    self.tag_revmap                      = {}
+
+    # Map from monorepo-rewritten submodule commit hash to new
+    # umbrella commit hash/mark where it was inlined.  Used for
+    # updating parents of non-inlined submodule commits.
+    self.inlined_submodule_revmap        = {}
+
+    # Map from new umbrella commit/hash to new submodule commit hashes
+    # inlined into it.
+    self.stage1_submodule_reverse_revmap = {}
+
+    # Map from old umbrella commit hash to new umbrella commit
+    # hash/mark after stage1.
+    self.stage1_umbrella_revmap          = {}
+
+    # Map from old umbrella commit hash to new umbrella commit
+    # hash/mark after stage2.
+    self.stage2_umbrella_revmap          = {}
+
+    # Map from new umbrella commit hash/mark to old umbrella commit
+    # hash.
+    self.stage1_umbrella_old_revmap      = {}
 
     if submodule_map_file:
       with open(submodule_map_file) as f:
@@ -580,24 +628,85 @@ class Zipper:
         tree = tree.remove_path(self.fm, pathsegs)
     return tree
 
-  def record_mappings(self, newhash, oldhash, updated_submodules):
+  def record_stage1_mappings(self, newhash, oldhash, updated_submodules,
+                             inlined_submodules):
     """Record the mapping of the original umbrella commit and map
        submodule update hashes to newhash so tags know where to
-       point
+       point.
     """
 
     # Map the original commit to the new zippped commit.
-    self.debug('Mapping umbrella %s to %s' % (oldhash, newhash))
-    self.umbrella_revmap[oldhash] = newhash
-    self.umbrella_old_revmap[newhash] = oldhash
+    mapped_newhash = self.fm.get_mark(newhash)
+    self.debug('Mapping umbrella %s to %s' % (oldhash, mapped_newhash))
+    self.stage1_umbrella_revmap[oldhash] = mapped_newhash
+
+    self.stage1_umbrella_old_revmap[mapped_newhash] = oldhash
 
     # Map the submodule commit to the new zipped commit so we can
-    # update tags.
+    # update tags.  These mappings will be used in stage2 to
+    # eventually map the original submodule commit to its final commit
+    # in zipped history.
     self.debug('Updated submodules %s' % updated_submodules)
-    for pathsegs, oldshash, newshash in updated_submodules:
+    self.debug('Inlined submodules %s' % inlined_submodules)
+    for pathsegs, oldshash, newshash in inlined_submodules:
       path = '/'.join(pathsegs)
-      self.debug('Mapping submodule %s %s to %s' % (path, newshash, newhash))
-      self.submodule_revmap[newshash] = newhash
+      self.debug('Mapping inlined submodule %s %s to %s' %
+                 (path, newshash, mapped_newhash))
+      self.inlined_submodule_revmap[newshash] = mapped_newhash
+
+      reverse_submodule_mapping = self.stage1_submodule_reverse_revmap.get(mapped_newhash)
+      if reverse_submodule_mapping:
+        reverse_submodule_mapping.add(newshash)
+      else:
+        reverse_submodule_mapping = set()
+        reverse_submodule_mapping.add(newshash)
+      self.stage1_submodule_reverse_revmap[mapped_newhash] = reverse_submodule_mapping
+
+    return None
+
+  def record_stage2_mappings(self, newziphash, oldziphash):
+    """Record the mapping of the original umbrella commit and map
+       submodule update hashes to newhash so tags know where to
+       point.
+    """
+
+    mapped_oldziphash = self.fm.get_mark(oldziphash)
+    mapped_newziphash = self.fm.get_mark(newziphash)
+
+    # If this is an original umbrella commit, map it to the stage2
+    # zippped commit.
+    orig_umbrella_hash = self.stage1_umbrella_old_revmap.get(mapped_oldziphash)
+    if orig_umbrella_hash:
+      self.debug('Mapping original umbrella %s to %s' %
+                 (orig_umbrella_hash, mapped_newziphash))
+      self.stage2_umbrella_revmap[orig_umbrella_hash] = newziphash
+
+      # Map submodule commits inlined into this umbrella from their
+      # original downstream commits to the new zippped commit.
+      reverse_submodule_mapping = self.stage1_submodule_reverse_revmap.get(mapped_oldziphash)
+      if reverse_submodule_mapping:
+        for newshash in reverse_submodule_mapping:
+          self.debug('Mapping inlined submodule downstream commit %s to %s' %
+                     (newshash, mapped_newziphash))
+          self.inlined_submodule_revmap[newshash] = newziphash
+          self.tag_revmap[newshash] = newziphash
+    else:
+      # Otherwise, this is a downstream commit that may or may not be
+      # linked into the final zipped history.  If it was inlined, it
+      # will not be linked in (children will have their parent
+      # rewritten to the zippped commit where it was inlined) and its
+      # mapping for the purpose of tag rewriting was done above when
+      # its corresponding umbrella commit was processed.  If it was
+      # not inlined, record the mapping from its original downstream
+      # commit to its new downstream commit (they may differ due to
+      # parent rewriting).
+      if not oldziphash in self.inlined_submodule_commits:
+        self.debug('Mapping non-inlined downstream %s to %s' %
+                   (mapped_oldziphash, mapped_newziphash))
+        self.stage2_umbrella_revmap[mapped_oldziphash] = newziphash
+        # Map this non-inlined downstream commit to newziphash to we can
+        # update tags.
+        self.tag_revmap[mapped_oldziphash] = newziphash
 
     return None
 
@@ -711,6 +820,83 @@ class Zipper:
     self.debug('Updated or added submodules: %s' % updated_submodules)
     return updated_submodules
 
+  def submodule_tree_in_old_parents(self, path, submodule_tree, parents):
+    """Return whether submodule_tree appears in any of parents."""
+    for p in parents:
+      parent_commit = self.fm.get_commit(p)
+      parent_tree = parent_commit.get_tree_entry()
+      if not parent_tree:
+        raise Exception('Could not find submodule %s in old parent %s' % (path, p))
+
+      if parent_tree == submodule_tree:
+        self.debug('submodule tree %s' % str(submodule_tree))
+        self.debug('parent tree    %s' % str(parent_tree))
+        self.debug('%s tree in old parent %s' % (path, p))
+        return True
+
+    return False
+
+  def submodule_tree_in_umbrella_parents(self, pathsegs, submodule_tree,
+                                         parents):
+    """Return whether submodule_tree was written into any of parents."""
+    path = '/'.join(pathsegs)
+    for p in parents:
+      parent_submodule_tree_map = self.submodule_tree_map.get(p)
+      if parent_submodule_tree_map:
+        parent_submodule_tree = parent_submodule_tree_map.get(path)
+        if parent_submodule_tree and parent_submodule_tree == submodule_tree:
+          self.debug('submodule tree %s' % str(submodule_tree))
+          self.debug('parent tree    %s' % str(parent_submodule_tree))
+          self.debug('%s tree in umbrella parent %s' % (path, p))
+          return True
+
+    return False
+
+  def get_inlined_submodules(self, githash, commit, oldparents,
+                             updated_submodules):
+    """Return a list of (submodule, oldhash, newhash) for each submodule
+       that will be inlined into this commit.  This differs from
+       updated or added submodules in that updated or added means the
+       tree for the submodule changes from the previous zipped commit
+       while inlined means the tree differs from all parents,
+       including any downstream parents."""
+
+    inlined_submodules = []
+    for pathsegs, oldhash, newhash in updated_submodules:
+      path='/'.join(pathsegs)
+      newcommit = self.fm.get_commit(newhash)
+
+      submodule_tree = newcommit.get_tree_entry()
+      if not submodule_tree:
+        raise Exception('Could not find submodule %s in submodule commit %s' %
+                        (path, newhash))
+
+      # Check previously-merged upstream and downstream parents.  If
+      # their submodule tree is the same as the updated submodule,
+      # then the submodule was NOT inlined in this commit.
+      merged_parents = []
+      for op in oldparents:
+        upstream_map = self.merged_upstream_parents.get(op)
+        if upstream_map:
+          upstream_parents = upstream_map.get(path)
+          if upstream_parents:
+            merged_parents.extend(upstream_parents)
+
+        downstream_map = self.merged_downstream_parents.get(op)
+        if downstream_map:
+          downstream_parents = downstream_map.get(path)
+          if downstream_parents:
+            merged_parents.extend(downstream_parents)
+
+      if not self.submodule_tree_in_old_parents(path, submodule_tree, merged_parents):
+        if not self.submodule_tree_in_umbrella_parents(pathsegs, submodule_tree, oldparents):
+          self.debug('Inlined %s %s' % (path, newhash))
+          self.inlined_submodule_commits.add(newhash)
+          inlined_submodules.append((pathsegs, oldhash, newhash))
+
+    self.debug('Inlined submodules: %s' % inlined_submodules)
+    return inlined_submodules
+
   def update_merged_parents(self, githash, submodules):
     """Record the upstream and downstream parents of updated
        submodules."""
@@ -823,38 +1009,38 @@ class Zipper:
     return parents
 
   def get_commit_message(self, githash, commit, oldparents, submodules,
-                         updated_submodules):
+                         inlined_submodules):
     if self.no_rewrite_commit_msg:
       return commit.msg
 
-    if len(updated_submodules) == 1:
-      # We only updated on submodule.  This commit will be inlined so
+    if len(inlined_submodules) == 1:
+      # We only inlined one submodule.  This commit will be inlined so
       # use the submodule commit's message.
-      pathsegs, oldhash, newhash = updated_submodules[0]
+      pathsegs, oldhash, newhash = inlined_submodules[0]
       newcommit = self.fm.get_commit(newhash)
       return newcommit.msg
 
-    # We updated zero or more than one submodule.  Include the
+    # We inlined zero or more than one submodule.  Include the
     # original umbrella commit to avoid confusion with log --oneline
     # listings, which would show two commits with the same subject
     # otherwise.
     newmsg = commit.msg
-    for pathsegs, oldhash, newhash in updated_submodules:
+    for pathsegs, oldhash, newhash in inlined_submodules:
       newcommit = self.fm.get_commit(newhash)
       newmsg = newmsg + '\n' + newcommit.msg
 
     self.debug('Updating commit message to:\n %s\n' % newmsg)
     return newmsg
 
-  def get_author_info(self, commit, updated_submodules):
-    if len(updated_submodules) == 1:
+  def get_author_info(self, commit, inlined_submodules):
+    if len(inlined_submodules) == 1:
       # We only updated or added one submodule.  If we're re-writing
       # commit messages, take author, committer and date information
-      # from the original commit.  If multiple submodules are updated,
+      # from the original commit.  If multiple submodules are inlined,
       # take the author, committer and date information from the
       # umbrella commit.
       if not self.no_rewrite_commit_msg:
-        pathsegs, oldhash, newhash = updated_submodules[0]
+        pathsegs, oldhash, newhash = inlined_submodules[0]
         self.debug('Updating author and commiter info from %s' % newhash)
         newcommit = self.fm.get_commit(newhash)
 
@@ -921,6 +1107,19 @@ class Zipper:
         # entire contents of the commit's tree.
         submodule_tree = newcommit.get_tree_entry()
 
+      # Record this tree for this submodule written into umbrella
+      # commit githash.  Do this before removing submodules so we see
+      # changes in the tree on submodule updates when determining
+      # which submodules were inlined to each umbrella commit.  A
+      # submodule was "inlined" even if the only thing that changed in
+      # it was updates of submodules under it.
+      tree_map = self.submodule_tree_map.get(githash)
+      if not tree_map:
+        tree_map = {}
+
+      tree_map[path] = submodule_tree
+      self.submodule_tree_map[githash] = tree_map
+
       # Remove submodules from this submodule.  Be sure to remove
       # upstrem_segs from the beginning of submodule paths, since that
       # path prefix is what got us to the submodule in the first
@@ -943,35 +1142,52 @@ class Zipper:
 
     return commit
 
-  def submodule_parent_filter(self, fm, monorepohash, commit, monorepoparents):
+  def submodule_parent_filter(self, fm, ziphash, commit, zipparents):
     """Rewrite any parents of non-inlined submodule commits to point to
     inlined submodule commits."""
 
     # Don't mess with monorepo upstream commits.
-    if monorepohash in self.new_upstream_hashes:
+    if ziphash in self.new_upstream_hashes:
       return commit
+
+    # Don't mess with old upstream commits either.  This happens if,
+    # for example, downstream uses the llvm repository itself as an
+    # umbrella.  We only want to rewrite the downstream commits of
+    # such a repository.
+    if ziphash in self.old_upstream_hashes:
+      return commit
+
+    self.debug('--- zip commit %s' % ziphash)
+    self.debug('%s\n' % commit.msg)
 
     # If this is an inlined submodule commit, just return it, no
     # parent rewriting need be done.
-    if monorepohash in self.umbrella_old_revmap:
-      return commit
-
-    self.debug('--- commit %s' % monorepohash)
-    self.debug('%s\n' % commit.msg)
+    if self.fm.get_mark(ziphash) in self.stage1_umbrella_old_revmap:
+      self.debug('Inlined, not updating parents')
+      return (commit,
+              lambda newhash, oldhash = ziphash:
+              self.record_stage2_mappings(newhash, oldhash))
 
     newparents = []
-    for mp in monorepoparents:
-      # Get the hash of the inlined submodule commit.  This is a
-      # rewritten umbrella commit.
-      newparent = self.submodule_revmap.get(mp, mp)
+    for zp in zipparents:
+      # If commit is a submodule commit that was not inlined, zp could
+      # be a monorepo-rewritten commit that was inlined into zipped
+      # history.  If so, inlined_submodule_revmap tells us which
+      # zipped commit it was inlined into.
+      newparent = self.inlined_submodule_revmap.get(zp, zp)
+      self.debug('Found new parent %s for zip parent %s' % (newparent, zp))
       newparents.append(newparent)
 
-    if newparents != monorepoparents:
-      self.debug('Updating parents of %s from %s to %s' %
-                 (monorepohash, monorepoparents, newparents))
+    if newparents != zipparents:
+      mapped_parents = [self.fm.get_mark(p) for p in newparents]
+      self.debug('Updating parents of non-inlined %s from %s to %s' %
+                 (ziphash, zipparents, mapped_parents))
       commit.parents = newparents
 
-    return commit
+    return (commit,
+            lambda newhash, oldhash = ziphash:
+            self.record_stage2_mappings(newhash, oldhash))
+
 
   def zip_filter(self, fm, githash, commit, oldparents):
     """Rewrite an umbrella branch with interleaved commits
@@ -1068,17 +1284,22 @@ class Zipper:
     commit.parents = self.determine_parents(fm, githash, commit, oldparents,
                                             submodules, updated_submodules)
 
+    inlined_submodules = self.get_inlined_submodules(githash, commit,
+                                                     oldparents,
+                                                     updated_submodules)
 
     self.update_merged_parents(githash, submodules)
 
     commit.msg = self.get_commit_message(githash, commit, oldparents,
-                                         submodules, updated_submodules)
+                                         submodules, inlined_submodules)
 
-    commit = self.get_author_info(commit, updated_submodules)
+    commit = self.get_author_info(commit, inlined_submodules)
 
     return (commit,
-            lambda newhash, changed_submodules = updated_submodules, oldhash = githash:
-            self.record_mappings(newhash, oldhash, changed_submodules))
+            lambda newhash, changed_submodules = updated_submodules,
+                   inl_submodules = inlined_submodules, oldhash = githash:
+            self.record_stage1_mappings(newhash, oldhash, changed_submodules,
+                                        inl_submodules))
 
   def run(self):
     if not self.revmap_in_file:
@@ -1099,24 +1320,50 @@ class Zipper:
     self.gather_upstream_commits()
     print "Done."
 
+    # stage1 - Replace submodule update trees with trees from their
+    # corresponding subproject commits.
     print "Zipping commits..."
     # Note that thil will not update any tags in the histories pointed
     # to by submodulees, since we don't ever rewrite those commits.
     # The call to update_refs below updates those tags.
     fast_filter_branch.do_filter(commit_filter=self.zip_filter,
                                  filter_manager=self.fm,
-                                 revmap_filename=self.revmap_out_file,
                                  reflist=expand_ref_pattern(self.reflist))
 
+    # Write out the repository for input to stage2.
+    print "Closing stream..."
+    self.fm.close()
+
+    self.fm = fast_filter_branch.FilterManager()
+
+    # stage2 - We now know the topology of the zippped history.  Go
+    # back and update parents of non-inlined subproject commits.  We
+    # do this in a separate stage because stage1 won't see any
+    # monorepo-rewritten local commits that aren't referenced by
+    # submodule updates, which are exactly the commits that need
+    # parents rewritten.  After stage1 those commits are attached to
+    # the rewritten umbrella history.
+    print "Rewriting local parents..."
+    # Pass the umbrella ref again so that new parents get propagated
+    # properly.  These should connect to the rewritten downstream
+    # history since subproject commits were inlined above.
+    fast_filter_branch.do_filter(commit_filter=self.submodule_parent_filter,
+                                 filter_manager=self.fm,
+                                 reflist=expand_ref_pattern(self.reflist))
+
+    # Finally, update any tags of commits we inlined.
     if self.update_tags:
       print "Updating tags..."
       fast_filter_branch.update_refs(self.fm, ['refs/tags'],
-                                     self.submodule_revmap, None, None, None)
+                                     self.tag_revmap, None, None, None)
 
-    print "Rewriting local parents..."
-    fast_filter_branch.do_filter(commit_filter=self.submodule_parent_filter,
-                                 filter_manager=self.fm,
-                                 reflist=expand_ref_pattern([self.downstream_prefix]))
+    if self.revmap_out_file:
+      revmap_out = open(self.revmap_out_file + '.tmp', 'w')
+      for oldrev, newrev in self.stage2_umbrella_revmap.iteritems():
+        # Make sure the revs we're writing are real sha1s, not marks
+        newrev = self.fm.get_mark(newrev)
+        revmap_out.write('%s %s\n' % (oldrev, newrev))
+      os.rename(self.revmap_out_file + '.tmp', self.revmap_out_file)
 
     self.fm.close()
     print "Done -- refs updated in-place."
@@ -1135,7 +1382,7 @@ Merges from upstream monorepo commits are preserved.  The commit
 message is replaced by the commit message(s) from the updated
 submodule(s), unless --no-rewrite-commit-msg is given.
 
-This tool DESTRUCTIVELY MODIFIES the umbrella branch it is run on!
+This tool DESTRUCTIVELY MODIFIES the umbrella branches it is run on!
 
 Typical usage:
   # First, prepare a repository by following the instructions in
