@@ -675,6 +675,17 @@ class Zipper:
       self.debug('Mapping original umbrella %s to %s' %
                  (orig_umbrella_hash, mapped_newziphash))
       self.stage2_umbrella_revmap[orig_umbrella_hash] = newziphash
+      self.tag_revmap[orig_umbrella_hash] = newziphash
+
+      migrate_commit_hash = self.revmap.get(orig_umbrella_hash)
+      if migrate_commit_hash:
+        # This is a commit in a subproject used as the umbrella.  It
+        # was rewritten to migrate_commit_hash by
+        # migrate-downstream-fork.py.  That commit migt have tags
+        # associated with it, so map it to the new zipped commit.
+        self.debug('%s is migrated project commit, mapping to %s' %
+                   (orig_umbrella_hash, newziphash))
+        self.tag_revmap[migrate_commit_hash] = newziphash
 
       # Map submodule commits inlined into this umbrella from their
       # original downstream commits to the new zippped commit.
@@ -702,6 +713,8 @@ class Zipper:
         # Map this non-inlined downstream commit to newziphash to we can
         # update tags.
         self.tag_revmap[mapped_oldziphash] = newziphash
+      else:
+        self.debug('%s is inlined submodule, not mapping' % oldziphash)
 
     return None
 
