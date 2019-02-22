@@ -7,7 +7,7 @@ import re
 import subprocess
 import sys
 
-svnrev_re=re.compile('^(?:llvm-svn: |llvm-svn=|git-svn-rev: )([0-9]+)\n\Z|^git-svn-id: https?://llvm.org/svn/llvm-project/([^/]*).*@([0-9]+) [0-9a-f-]*\n\Z', re.MULTILINE)
+svnrev_re=re.compile('^(?:llvm-svn: |llvm-svn=|git-svn-rev: )([0-9]+)$|^git-svn-id: https?://llvm.org/svn/llvm-project/([^/]*).*@([0-9]+) [0-9a-f-]*$')
 
 def expand_ref_pattern(patterns):
   return subprocess.check_output(
@@ -32,31 +32,56 @@ class Migrator:
     self.source_kind = source_kind
     self.notes_tree = None
 
-  def find_svnrev(self, rev):
-    """Figure out what svn revision an existing commit is.
+  def find_svnrevs_in_msg(self, msg):
+    """Parse a message for svn revisions.
 
-    Returns (svnrev, subproject), or (None, None) if it's not from an svn
-    commit.
+    Returns list(re.Match, ...)
+    """
+    # Care must be taken, since a message might contain a reference to another
+    # svn revision in its body. We do know, however, that the revisions are
+    # found at the end of the message.
+    matches = []
+    for line in reversed(msg.splitlines()):
+        match = svnrev_re.match(line)
+        if match is None:
+            # The first non-matching line signifies that we've passed the
+            # revision section of the message.
+            break
+        else:
+            matches.append(match)
+
+    return matches
+
+  def find_svnrevs(self, rev):
+    """Figure out what svn revisions an existing commit maps to.
+
+    Returns list((svnrev, subproject), ...) where list((None, None))
+    represents not being an svn commit.
     """
     c = self.fm.get_commit(rev)
 
-    re_match = svnrev_re.search(c.msg)
-    if not re_match and self.notes_tree is not None:
+    re_matches = self.find_svnrevs_in_msg(c.msg)
+    if not re_matches and self.notes_tree is not None:
       # If no match in the commit message, see if we can match it in the git note.
       notes_blob = self.notes_tree.get_path(self.fm, [rev[0:2], rev[2:4], rev[4:]])
       if notes_blob is not None:
         note_msg = self.fm.get_blob(notes_blob.githash)
-        re_match = svnrev_re.search(note_msg)
+        re_matches = self.find_svnrevs_in_msg(note_msg)
 
-    if not re_match:
-      return None, None
-    if re_match.group(1) is not None:
-      return int(re_match.group(1)), None
-    else:
-      subproject = re_match.group(2)
-      if subproject == 'cfe':
-        subproject = 'clang'
-      return int(re_match.group(3)), subproject
+    if not re_matches:
+      return [(None, None)]
+
+    rev_subproject_tuples = list()
+    for re_match in re_matches:
+      if re_match.group(1) is not None:
+        rev_subproject_tuples.append((int(re_match.group(1)), None))
+      else:
+        subproject = re_match.group(2)
+        if subproject == 'cfe':
+          subproject = 'clang'
+        rev_subproject_tuples.append((int(re_match.group(3)), subproject))
+
+    return rev_subproject_tuples
 
   def detect_new_svn_revisions(self):
     """Walk all refs under new_upstream_prefix, and find their svn revisions."""
@@ -71,12 +96,15 @@ class Migrator:
     # Now, store a map from the svn revision number to the new git commit, and
     # from the git commit to the svn rev.
     for rev in self.newrev_set:
-      svnrev, subproject = self.find_svnrev(rev)
-      if svnrev is not None:
+      svnrevs = self.find_svnrevs(rev)
+      if svnrevs[0][0] is None:
+        # git commit is not an svn revision
+        continue
+      self.base_svn_mapping[rev] = svnrevs
+      for svnrev, subproject in svnrevs:
         if subproject is not None:
           raise Exception("Did not expect to find non-monorepo commit %s in upstream prefixes." % rev)
         self.svn_to_newrev[svnrev] = rev
-        self.base_svn_mapping[rev] = (svnrev, subproject)
 
     if not self.svn_to_newrev:
       raise Exception("Couldn't find any svn revisions in upstream prefix?")
@@ -92,10 +120,14 @@ class Migrator:
 
     self.oldrev_set = set(subprocess.check_output(['git', 'rev-list'] + refs).split('\n')[:-1])
     for rev in self.oldrev_set:
-      svnrev, subproject = self.find_svnrev(rev)
-      if svnrev is not None:
-        self.base_svn_mapping[rev] = (svnrev, subproject)
-        subproject_set.add(subproject)
+      svnrevs = self.find_svnrevs(rev)
+      if svnrevs[0][0] is None:
+        # git commit is not an svn revision
+        continue
+      self.base_svn_mapping[rev] = svnrevs
+      for svnrev, subproject in svnrevs:
+        if svnrev is not None:
+          subproject_set.add(subproject)
 
     # Now, set the source kind, depending on the source repositories.
     if self.source_kind == 'autodetect':
@@ -122,7 +154,7 @@ class Migrator:
     # Translate old upstream commit into new upstream commit
     if githash in self.oldrev_set:
       if githash in self.base_svn_mapping:
-        svnrev = self.base_svn_mapping[githash][0]
+        svnrev = self.base_svn_mapping[githash][0][0]
         if svnrev in self.svn_to_newrev:
           return self.svn_to_newrev[svnrev]
         else:
@@ -142,7 +174,7 @@ class Migrator:
     if not oldparents:
       raise Exception("Unexpected root commit %s" % githash)
 
-    parent_svn_info = [self.base_svn_mapping[p] for p in oldparents]
+    parent_svn_info = [self.base_svn_mapping[p][0] for p in oldparents]
     subproject = parent_svn_info[0][1]
     for p in parent_svn_info:
       if p[1] != subproject:
@@ -197,7 +229,7 @@ class Migrator:
       newtree.write_subentries(fm)
       commit.treehash = newtree.githash
 
-    self.base_svn_mapping[githash] = (self.base_svn_mapping[svnancestor][0], subproject)
+    self.base_svn_mapping[githash] = [(self.base_svn_mapping[svnancestor][0][0], subproject)]
     return commit
 
   def run(self):
