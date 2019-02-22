@@ -675,6 +675,17 @@ class Zipper:
       self.debug('Mapping original umbrella %s to %s' %
                  (orig_umbrella_hash, mapped_newziphash))
       self.stage2_umbrella_revmap[orig_umbrella_hash] = newziphash
+      self.tag_revmap[orig_umbrella_hash] = newziphash
+
+      migrate_commit_hash = self.revmap.get(orig_umbrella_hash)
+      if migrate_commit_hash:
+        # This is a commit in a subproject used as the umbrella.  It
+        # was rewritten to migrate_commit_hash by
+        # migrate-downstream-fork.py.  That commit migt have tags
+        # associated with it, so map it to the new zipped commit.
+        self.debug('%s is migrated project commit, mapping to %s' %
+                   (orig_umbrella_hash, newziphash))
+        self.tag_revmap[migrate_commit_hash] = newziphash
 
       # Map submodule commits inlined into this umbrella from their
       # original downstream commits to the new zippped commit.
@@ -702,6 +713,8 @@ class Zipper:
         # Map this non-inlined downstream commit to newziphash to we can
         # update tags.
         self.tag_revmap[mapped_oldziphash] = newziphash
+      else:
+        self.debug('%s is inlined submodule, not mapping' % oldziphash)
 
     return None
 
@@ -1008,27 +1021,36 @@ class Zipper:
     if self.no_rewrite_commit_msg:
       return commit.msg
 
-    if len(inlined_submodules) == 1:
+    umbrella_is_rewritten_downstream_commit = False
+    if githash in self.revmap:
+      umbrella_is_rewritten_downstream_commit = True
+
+    if len(inlined_submodules) == 1 and not umbrella_is_rewritten_downstream_commit:
       # We only inlined one submodule.  This commit will be inlined so
       # use the submodule commit's message.
       pathsegs, oldhash, newhash = inlined_submodules[0]
       newcommit = self.fm.get_commit(newhash)
       return newcommit.msg
 
-    # We inlined zero or more than one submodule.  Include the
-    # original umbrella commit to avoid confusion with log --oneline
-    # listings, which would show two commits with the same subject
-    # otherwise.
+    # We inlined zero or more than one submodule or the umbrella
+    # itself is a subproject.  Include the original umbrella commit to
+    # avoid confusion with log --oneline listings, which would show
+    # two commits with the same subject otherwise.
     newmsg = commit.msg
     for pathsegs, oldhash, newhash in inlined_submodules:
+      path = '/'.join(pathsegs)
       newcommit = self.fm.get_commit(newhash)
-      newmsg = newmsg + '\n' + newcommit.msg
+      newmsg = newmsg + '\n\n[' + path + ']\n\n' + newcommit.msg
 
     self.debug('Updating commit message to:\n %s\n' % newmsg)
     return newmsg
 
-  def get_author_info(self, commit, inlined_submodules):
-    if len(inlined_submodules) == 1:
+  def get_author_info(self, githash, commit, inlined_submodules):
+    umbrella_is_rewritten_downstream_commit = False
+    if githash in self.revmap:
+      umbrella_is_rewritten_downstream_commit = True
+
+    if len(inlined_submodules) == 1 and not umbrella_is_rewritten_downstream_commit:
       # We only updated or added one submodule.  If we're re-writing
       # commit messages, take author, committer and date information
       # from the original commit.  If multiple submodules are inlined,
@@ -1288,7 +1310,7 @@ class Zipper:
     commit.msg = self.get_commit_message(githash, commit, oldparents,
                                          submodules, inlined_submodules)
 
-    commit = self.get_author_info(commit, inlined_submodules)
+    commit = self.get_author_info(githash, commit, inlined_submodules)
 
     return (commit,
             lambda newhash, changed_submodules = updated_submodules,
