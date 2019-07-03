@@ -33,7 +33,7 @@ set -e
 # Second push: Do a dry run and parse the output to determine which commits have not been
 # pushed yet.
 push_to_llvm_project -n 2>&1 |  grep -o '[0-9a-f]\+\.\.[0-9a-f]\+' | while read -r line; do
-    git rev-list -C mono/monorepo $line | while read -r commit; do
+    git -C mono/monorepo rev-list $line | while read -r commit; do
       echo "Setting status check for: $commit"
       curl  -H "Authorization: token $token" https://api.github.com/repos/llvm/llvm-project/statuses/$commit  -X POST --data '{"state": "success", "context": "rebased" }'
     done
