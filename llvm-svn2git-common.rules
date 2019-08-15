@@ -3,7 +3,7 @@
 declare MONOREPO_PROJECTS=(?:cfe|monorepo-root|clang-tools-extra|compiler-rt|debuginfo-tests|libclc|libcxx|libcxxabi|libunwind|lld|lldb|llgo|llvm|openmp|parallel-libs|polly|stacker|pstl|flang)
 declare SEPARATED_PROJECTS=(?:lnt|test-suite|www|www-pubs|zorg)
 declare ARCHIVE_PROJECTS=(?:llvm-gcc-4-2|clang-tests|clang-tests-external|core|llvm-top|sample|support|hlvm|llvm-gcc-4.0|llvm-gcc-4.2|llbrowse|television|nightly-test-server|java|vmkit|gcc-plugin|dragonegg|safecode|poolalloc)
-declare IGNORED_PROJECTS=(?:giri|klee|elp|lold|tmp|website|trunk|tags|branches|cfe.dead|www-releases)
+declare IGNORED_PROJECTS=(?:giri|klee|elp|lold|tmp|website|trunk|tags|branches|cfe.dead|www-releases|meta)
 
 # Some branches are at a different level. Enumerate those.
 declare NESTED_BRANCHNAMES=(?:Apple/1040|Apple|checker|cremebrulee|google|ggreif|GSoC|wendling)
