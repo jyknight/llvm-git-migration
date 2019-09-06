@@ -111,7 +111,7 @@ class Migrator:
                           (subproject_set, split_repos))
         self.source_kind = "auxilliary"
       else:
-        self.source_kind = "merge-split"
+        self.source_kind = "split"
 
   def commit_filter(self, fm, githash, commit, oldparents):
     """Do the real filtering work..."""
@@ -221,7 +221,7 @@ class Migrator:
     print "Using conversion mode: %s (%s)." % (
         self.source_kind,
         {'monorepo' : 'Monorepo to monorepo',
-         'merge-split': 'Split repositories to monorepo',
+         'split': 'Split repositories to monorepo',
          'auxilliary': 'Auxilliary repo'}[self.source_kind],)
 
     print "Filtering commits..."
