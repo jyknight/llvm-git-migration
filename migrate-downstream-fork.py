@@ -309,7 +309,7 @@ For migrating from the old monorepo to the new monorepo:
                       help="The prefix for all the refs of the old repository/repositories (default: %(default)s).")
   parser.add_argument('--old-repo-notes', metavar="REF", default=None,
                       help="Additionally check for svn revision numbers in the given notes ref.")
-  parser.add_argument('--source-kind', choices=["split", "monorepo", "auxilliary", "autodetect"], default="autodetect",
+  parser.add_argument('--source-kind', choices=["merge-split", "monorepo", "auxilliary", "autodetect"], default="autodetect",
                       help="What kind of old repository you have (default: autodetect)")
   parser.add_argument("reflist", metavar="REFPATTERN", help="Patterns of the references to convert.", nargs='+')
   parser.add_argument("--revmap-out", metavar="FILE", default=None)
